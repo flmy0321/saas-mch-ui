@@ -14,8 +14,9 @@
 | --- | --- |
 | Base URL | `/api/portal/v1`（与前端同域，或通过网关反向代理） |
 | 协议 | HTTPS，`Content-Type: application/json; charset=utf-8` |
-| 鉴权 | 登录后由服务端下发 `HttpOnly; Secure; SameSite=Lax` 的会话 Cookie；所有接口要求已登录，商户维度由会话确定，**任何请求参数都不得用于切换商户** |
-| CSRF | 非 GET 请求需携带 `X-CSRF-Token` 请求头（值来自登录响应或 `GET /csrf`） |
+| 鉴权 | Bearer Token：除 `/auth/*` 外所有接口须携带 `Authorization: Bearer <accessToken>`，详见 5.0。商户维度由 token 对应的用户确定，**任何请求参数都不得用于切换商户** |
+| CSRF | 不使用 Cookie 鉴权，因此无需 CSRF Token；服务端不得从 Cookie 读取凭证 |
+| CORS | 如前后端不同域，仅放行商户后台域名，允许 `Authorization` 请求头，不要使用 `Access-Control-Allow-Origin: *` |
 | 字段命名 | JSON 字段使用 lowerCamelCase |
 | 时间 | ISO 8601 UTC 字符串，如 `2026-11-02T08:30:00.000Z`；前端按浏览器时区展示 |
 | 日期参数 | 查询参数中的日期区间使用 `YYYY-MM-DD`，按商户时区（Asia/Shanghai）解释，`from` 取当日 00:00:00，`to` 取当日 23:59:59.999 |
@@ -51,7 +52,10 @@
 | HTTP | code | 含义 |
 | --- | --- | --- |
 | 400 | `VALIDATION` | 参数校验失败（缺失、格式错误、越界） |
-| 401 | `UNAUTHENTICATED` | 未登录或会话过期，前端跳转登录页 |
+| 401 | `UNAUTHENTICATED` | 未携带 token、token 无效/过期/已吊销。业务接口返回后前端会用 refresh token 刷新并重试一次，仍失败则跳转登录页 |
+| 400 | `CAPTCHA_INVALID` | 登录验证码错误或已过期（验证码一次性使用） |
+| 401 | `INVALID_CREDENTIALS` | 账号或密码错误，`message` 可带剩余尝试次数 |
+| 423 | `ACCOUNT_LOCKED` | 连续登录失败过多，账号临时锁定 |
 | 403 | `FORBIDDEN` | 已登录但无该操作权限 |
 | 404 | `NOT_FOUND` | 资源不存在，**或不属于当前商户**（不要用 403 泄露资源存在性） |
 | 409 | `DUPLICATE` | 唯一键冲突（商户门店编号、商户退款编号） |
@@ -204,6 +208,9 @@
 - `Merchant`：`merchantNo`, `name`, `shortName`, `status: ACTIVE | RESTRICTED`, `legalName`, `creditCode`, `industry`, `contactEmail`, `contactPhone`, `address`, `createdAt`
 - `CurrentUser`：`id`, `name`, `email`, `phone`, `role`, `lastLoginAt`, `lastLoginIp`
 - `LoginSession`：`id`, `device`, `browser`, `ip`, `location`, `lastActiveAt`, `current: boolean`
+- `Captcha`：`captchaId`, `image`（data URL）, `expiresIn`（秒）
+- `LoginInput`：`account`, `password`, `captchaId`, `captchaCode`
+- `AuthTokens`：`tokenType: "Bearer"`, `accessToken`, `expiresIn`, `refreshToken`, `refreshExpiresIn`；`LoginResult` = `AuthTokens` + `user: CurrentUser`
 - `Notification`：`id`, `title`, `description`, `createdAt`, `read`, `level: info | warning | danger`, `link?`（前端路由路径，如 `/payments/pay_xxx`）
 
 ---
@@ -212,6 +219,10 @@
 
 | 前端方法 | HTTP |
 | --- | --- |
+| `auth.captcha()` | `GET /auth/captcha`（无需鉴权） |
+| `auth.login(input)` | `POST /auth/login`（无需鉴权） |
+| `auth.refresh(refreshToken)` | `POST /auth/refresh`（无需鉴权） |
+| `auth.logout(refreshToken)` | `POST /auth/logout` |
 | `dashboard.summary()` | `GET /dashboard/summary` |
 | `dashboard.trend(days)` | `GET /dashboard/trend?days=` |
 | `dashboard.channelShare(days)` | `GET /dashboard/channel-share?days=` |
@@ -254,6 +265,66 @@
 ---
 
 ## 5. 接口详情
+
+### 5.0 认证 Auth（Bearer Token）
+
+采用「短时效 access token + 长时效 refresh token」双令牌方案。
+
+| 令牌 | 建议有效期 | 用途 | 服务端要求 |
+| --- | --- | --- | --- |
+| `accessToken` | 2 小时 | 放在 `Authorization: Bearer` 头访问业务接口 | 签名 JWT（含 `sub`=用户 ID、`mid`=商户号、`sid`=会话 ID、`exp`）或不透明随机串 + 服务端查表均可；校验时须确认所属会话未被吊销 |
+| `refreshToken` | 7 天 | 仅用于 `POST /auth/refresh` 换取新令牌 | 不透明随机串，服务端只存哈希；**每次刷新轮换**（旧 refresh token 立即作废），检测到已作废 token 被重放时吊销整个会话 |
+
+每次登录产生一条 `LoginSession`（即 `GET /account/sessions` 列表中的一项），`DELETE /account/sessions/{id}` 与 `POST /account/password` 修改密码后须吊销对应会话（修改密码时吊销除当前会话外的所有会话），其 access token 随即在业务接口上返回 401。
+
+#### `GET /auth/captcha`
+
+响应 `Captcha`：
+
+```json
+{ "captchaId": "cap_9f2c...", "image": "data:image/svg+xml;base64,...", "expiresIn": 300 }
+```
+
+`image` 为可直接用于 `<img src>` 的 data URL（PNG 或 SVG）。验证码 4 位、不区分大小写、**一次性使用**（无论登录成败，校验后即作废），有效期 `expiresIn` 秒。
+
+#### `POST /auth/login`
+
+请求 `LoginInput`：
+
+```json
+{ "account": "ops@example.com", "password": "******", "captchaId": "cap_9f2c...", "captchaCode": "K7QM" }
+```
+
+- `account`：登录邮箱或手机号，服务端忽略大小写与首尾空白。
+- 校验顺序：参数 → 验证码（`CAPTCHA_INVALID`）→ 锁定状态（`ACCOUNT_LOCKED`）→ 账号密码（`INVALID_CREDENTIALS`）。
+- 账号不存在与密码错误必须返回同一错误码与文案，避免枚举账号；同一账号连续失败 5 次锁定 15 分钟，成功登录后清零。另需按 IP 限流（`RATE_LIMITED`）。
+- 密码使用 bcrypt / argon2 存储，不得记录到日志。
+- 成功时更新 `CurrentUser.lastLoginAt` / `lastLoginIp`，并新建 `LoginSession`。
+
+响应 `LoginResult`（`AuthTokens` + `user`）：
+
+```json
+{
+  "tokenType": "Bearer",
+  "accessToken": "eyJhbGciOi...",
+  "expiresIn": 7200,
+  "refreshToken": "rt_5b1e...",
+  "refreshExpiresIn": 604800,
+  "user": { "id": "u_001", "name": "...", "email": "...", "phone": "...", "role": "...", "lastLoginAt": "...", "lastLoginIp": "..." }
+}
+```
+
+`expiresIn` / `refreshExpiresIn` 单位为秒，前端据此计算本地过期时间。
+
+#### `POST /auth/refresh`
+
+请求 `{ "refreshToken": "rt_5b1e..." }`，响应 `AuthTokens`（不含 `user`，结构同上）。refresh token 无效、过期、已轮换或会话已吊销时返回 `401 UNAUTHENTICATED`，前端清除本地令牌并跳转登录页。
+
+前端行为（供联调参考）：业务接口收到 401 时自动调用一次 refresh 并重试原请求；多个并发请求共享同一次刷新，所以服务端对同一 refresh token 的并发请求只需保证一个成功即可。
+
+#### `POST /auth/logout`
+
+请求头携带当前 access token，请求体 `{ "refreshToken": "rt_5b1e..." }`。服务端吊销该会话（access token 与 refresh token 同时失效），返回 `204`。token 已失效时也返回 `204`，保证幂等；前端无论成败都会清除本地令牌。
 
 ### 5.1 工作台 Dashboard
 

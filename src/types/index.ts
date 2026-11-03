@@ -171,6 +171,36 @@ export interface CurrentUser {
   lastLoginIp: string
 }
 
+export interface Captcha {
+  captchaId: string
+  /** 验证码图片，data URL（image/svg+xml 或 image/png） */
+  image: string
+  /** 有效期，秒 */
+  expiresIn: number
+}
+
+export interface LoginInput {
+  /** 登录邮箱或手机号 */
+  account: string
+  password: string
+  captchaId: string
+  captchaCode: string
+}
+
+export interface AuthTokens {
+  tokenType: 'Bearer'
+  accessToken: string
+  /** access token 有效期，秒 */
+  expiresIn: number
+  refreshToken: string
+  /** refresh token 有效期，秒 */
+  refreshExpiresIn: number
+}
+
+export interface LoginResult extends AuthTokens {
+  user: CurrentUser
+}
+
 export interface LoginSession {
   id: string
   device: string

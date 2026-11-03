@@ -2,12 +2,16 @@ import type {
   AnalyticsQuery,
   AnalyticsResult,
   ApiKey,
+  AuthTokens,
+  Captcha,
   ChannelShare,
   CreateRefundInput,
   CreatedApiKey,
   CurrentUser,
   DashboardSummary,
   GlobalSearchResult,
+  LoginInput,
+  LoginResult,
   LoginSession,
   Merchant,
   MerchantApp,
@@ -33,6 +37,13 @@ import type {
  * Mock 实现与未来的真实 HTTP 实现都必须满足该接口，页面只依赖此接口。
  */
 export interface MerchantApi {
+  /** 认证接口：无需 Authorization 头 */
+  auth: {
+    captcha(): Promise<Captcha>
+    login(input: LoginInput): Promise<LoginResult>
+    refresh(refreshToken: string): Promise<AuthTokens>
+    logout(refreshToken: string): Promise<void>
+  }
   dashboard: {
     summary(): Promise<DashboardSummary>
     trend(days: number): Promise<TrendPoint[]>

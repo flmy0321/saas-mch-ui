@@ -1,7 +1,15 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
+import { toast } from 'vue-sonner'
 import AppLayout from '@/layouts/AppLayout.vue'
+import { tokenStorage } from '@/services/auth/token'
+import { setUnauthenticatedHandler } from '@/services/api'
 
 const routes: RouteRecordRaw[] = [
+  {
+    path: '/login',
+    component: () => import('@/pages/auth/LoginPage.vue'),
+    meta: { title: '登录', public: true },
+  },
   {
     path: '/',
     component: AppLayout,
@@ -109,6 +117,29 @@ export const router = createRouter({
     if (to.path === from.path) return false
     return { top: 0 }
   },
+})
+
+/** 只允许站内相对路径，防止 ?redirect= 被用于开放重定向 */
+export function safeRedirect(value: unknown) {
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !value.startsWith('/login')
+    ? value
+    : '/dashboard'
+}
+
+router.beforeEach((to) => {
+  const authed = tokenStorage.isAuthenticated()
+  if (to.meta.public) {
+    return to.path === '/login' && authed ? safeRedirect(to.query.redirect) : true
+  }
+  if (!authed) return { path: '/login', query: { redirect: to.fullPath } }
+  return true
+})
+
+setUnauthenticatedHandler(() => {
+  const current = router.currentRoute.value
+  if (current.meta.public) return
+  toast.error('登录已过期，请重新登录')
+  router.replace({ path: '/login', query: { redirect: current.fullPath } })
 })
 
 router.afterEach((to) => {

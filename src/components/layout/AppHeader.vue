@@ -16,8 +16,19 @@ import { cn } from '@/utils/cn'
 
 const app = useAppStore()
 const { isDark, env, simulateNetworkError, searchOpen, mobileNavOpen } = storeToRefs(app)
-const { user, merchant } = storeToRefs(useSessionStore())
+const session = useSessionStore()
+const { user, merchant } = storeToRefs(session)
 const router = useRouter()
+
+async function logout() {
+  try {
+    await session.logout()
+  } catch {
+    // 服务端注销失败不影响本地退出，token 已在 finally 中清除
+  }
+  toast.success('已退出登录')
+  router.replace('/login')
+}
 
 const initials = computed(() => user.value?.name.slice(-2) ?? '')
 
@@ -126,7 +137,7 @@ function switchEnv(next: 'production' | 'sandbox') {
         <Switch v-model="simulateNetworkError" aria-label="模拟网络异常" />
       </label>
       <div class="my-1 h-px bg-border" />
-      <DropdownItem danger @select="toast.info('演示环境不支持退出登录')"><LogOut />退出登录</DropdownItem>
+      <DropdownItem danger @select="logout"><LogOut />退出登录</DropdownItem>
     </DropdownMenu>
   </header>
 </template>

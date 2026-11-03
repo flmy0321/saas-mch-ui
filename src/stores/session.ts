@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api } from '@/services/api'
-import type { CurrentUser, Merchant, Notification, Store } from '@/types'
+import { tokenStorage } from '@/services/auth/token'
+import type { CurrentUser, LoginInput, Merchant, Notification, Store } from '@/types'
 
 /** 会话级共享数据：当前用户、商户、门店字典、消息通知 */
 export const useSessionStore = defineStore('session', () => {
@@ -26,6 +27,29 @@ export const useSessionStore = defineStore('session', () => {
     if (n.status === 'fulfilled') notifications.value = n.value
   }
 
+  async function login(input: LoginInput) {
+    const { user: me, ...tokens } = await api.auth.login(input)
+    tokenStorage.save(tokens)
+    user.value = me
+  }
+
+  function reset() {
+    user.value = null
+    merchant.value = null
+    stores.value = []
+    notifications.value = []
+  }
+
+  async function logout() {
+    const refreshToken = tokenStorage.get()?.refreshToken
+    try {
+      if (refreshToken) await api.auth.logout(refreshToken)
+    } finally {
+      tokenStorage.clear()
+      reset()
+    }
+  }
+
   async function refreshStores() {
     stores.value = await api.stores.all()
   }
@@ -35,5 +59,18 @@ export const useSessionStore = defineStore('session', () => {
     notifications.value = notifications.value.map((n) => ({ ...n, read: true }))
   }
 
-  return { user, merchant, stores, notifications, unreadCount, storeOptions, bootstrap, refreshStores, markAllRead }
+  return {
+    user,
+    merchant,
+    stores,
+    notifications,
+    unreadCount,
+    storeOptions,
+    bootstrap,
+    login,
+    logout,
+    reset,
+    refreshStores,
+    markAllRead,
+  }
 })

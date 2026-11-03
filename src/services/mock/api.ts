@@ -14,6 +14,7 @@ import type {
 } from '@/types'
 import { ApiError, type MerchantApi } from '@/services/api/types'
 import { delay } from './control'
+import { assertAuthenticated, mockAuth } from './auth'
 import {
   COUNTED_REFUND,
   DAY,
@@ -260,7 +261,7 @@ function validateStore(input: { name: string; merchantStoreNo: string }, exceptI
   }
 }
 
-export const mockApi: MerchantApi = {
+const protectedApi: Omit<MerchantApi, 'auth'> = {
   dashboard: {
     summary: () =>
       delay(() => {
@@ -591,6 +592,23 @@ export const mockApi: MerchantApi = {
       return out
     }, 180),
 }
+
+/** 为所有业务接口加上登录校验，模拟服务端对 Authorization 头的检查 */
+function requireAuth<T extends object>(target: T): T {
+  return Object.fromEntries(
+    Object.entries(target).map(([key, value]) => [
+      key,
+      typeof value === 'function'
+        ? async (...args: unknown[]) => {
+            assertAuthenticated()
+            return value(...args)
+          }
+        : requireAuth(value as object),
+    ]),
+  ) as T
+}
+
+export const mockApi: MerchantApi = { auth: mockAuth, ...requireAuth(protectedApi) }
 
 export const MOCK_NOW = NOW
 export const MOCK_MIN = MIN
