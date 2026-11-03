@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { cn } from '@/utils/cn'
 
-defineProps<{ title?: string; description?: string; class?: string; bodyClass?: string; padded?: boolean }>()
+withDefaults(
+  defineProps<{ title?: string; description?: string; class?: string; bodyClass?: string; padded?: boolean }>(),
+  { padded: true },
+)
 </script>
 
 <template>
