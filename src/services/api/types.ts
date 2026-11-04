@@ -37,7 +37,7 @@ import type {
  * Mock 实现与未来的真实 HTTP 实现都必须满足该接口，页面只依赖此接口。
  */
 export interface MerchantApi {
-  /** 认证接口：无需 Authorization 头 */
+  /** 认证接口：captcha / login / refresh 无需 Authorization 头；logout 需携带当前 access token */
   auth: {
     captcha(): Promise<Captcha>
     login(input: LoginInput): Promise<LoginResult>
