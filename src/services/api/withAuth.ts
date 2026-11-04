@@ -1,5 +1,5 @@
 import { tokenStorage } from '@/services/auth/token'
-import { ApiError, type MerchantApi } from './types'
+import { isSessionUnauthenticated, type MerchantApi } from './types'
 
 type Handler = () => void
 let onUnauthenticated: Handler = () => {}
@@ -25,10 +25,12 @@ function refreshTokens(raw: MerchantApi): Promise<boolean> {
   return refreshing
 }
 
-const isUnauthenticated = (e: unknown) => e instanceof ApiError && e.code === 'UNAUTHENTICATED'
+const isUnauthenticated = isSessionUnauthenticated
 
 /**
- * 业务接口统一处理：收到 401（UNAUTHENTICATED）时用 refresh token 换新 token 并重试一次；
+ * 业务接口统一处理：仅收到 HTTP 401 且 code === UNAUTHENTICATED 时用 refresh token 换新 token 并重试一次；
+ * 服务端保证该响应发生在认证阶段、业务未执行，因此资金写在此前提下也只重试这一次。
+ * 网络错误、5xx、UPSTREAM_UNKNOWN 等一律不自动重发。
  * 刷新失败则清除本地 token 并交给 onUnauthenticated 跳转登录页。并发请求共享同一次刷新。
  */
 export function withAuth(raw: MerchantApi): MerchantApi {

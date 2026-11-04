@@ -25,6 +25,33 @@ import type {
   WebhookEventType,
 } from '@/types'
 
+type PaymentAmountKeys =
+  | 'amount'
+  | 'paidAmount'
+  | 'refundedAmount'
+  | 'refundingAmount'
+  | 'refundPrincipalLimit'
+  | 'availableRefundAmount'
+
+/** Mock 内部行：金额以 BigInt 分保存，仅在接口边界转换为 AmountDecimal 字符串 */
+export interface PaymentRow extends Omit<Payment, PaymentAmountKeys> {
+  amount: bigint
+  paidAmount: bigint | null
+  refundedAmount: bigint
+  refundingAmount: bigint
+  refundPrincipalLimit: bigint | null
+  availableRefundAmount: bigint | null
+  /** 幂等作用域（Mock 以应用划分），不暴露给网页 */
+  scope: string
+  /** 固定演示数据：不由 recomputePayment 覆盖退款资格字段 */
+  pinnedEligibility?: boolean
+}
+
+export interface RefundRow extends Omit<Refund, 'amount'> {
+  amount: bigint
+  scope: string
+}
+
 function mulberry32(seed: number) {
   let a = seed
   return () => {
@@ -168,33 +195,34 @@ const STORE_WEIGHTS: [string, number][] = [
 /* ------------------------------------------------------------------ */
 
 const SUBJECTS = ['便利店商品', '鲜食套餐', '咖啡饮品', '日用百货', '烘焙面包', '会员充值商品', '生鲜水果', '零食组合']
-const METHODS: Record<PaymentChannel, [PaymentMethod, number][]> = {
+const METHODS: Partial<Record<PaymentChannel, [PaymentMethod, number][]>> = {
   WECHAT: [
-    ['MICROPAY', 40],
+    ['MERCHANT_SCAN', 40],
     ['MINI_PROGRAM', 30],
-    ['JSAPI', 15],
-    ['NATIVE', 10],
-    ['APP', 5],
+    ['OFFICIAL_ACCOUNT', 15],
+    ['QR', 10],
+    ['SDK', 5],
   ],
   ALIPAY: [
-    ['MICROPAY', 45],
-    ['NATIVE', 20],
+    ['MERCHANT_SCAN', 45],
+    ['QR', 20],
     ['H5', 15],
-    ['APP', 12],
+    ['SDK', 12],
     ['MINI_PROGRAM', 8],
   ],
   UNIONPAY: [
-    ['MICROPAY', 60],
-    ['NATIVE', 30],
-    ['APP', 10],
+    ['MERCHANT_SCAN', 60],
+    ['QR', 30],
+    ['SDK', 10],
   ],
 }
 const FAIL_REASONS = ['用户余额不足', '用户取消支付', '支付渠道风控拦截', '银行卡状态异常']
+const APP_SCOPES = ['app_9f3c2a71d40e8b15', 'app_51be07c6a92f3d48']
 
-function randomAmount(): number {
+function randomAmount(): bigint {
   const yuan = Math.exp(Math.log(6) + rand() * (Math.log(1800) - Math.log(6)))
   const fen = Math.round(yuan * 100)
-  return Math.max(100, Math.round(fen / 10) * 10)
+  return BigInt(Math.max(100, Math.round(fen / 10) * 10))
 }
 
 function businessTime(dayStart: number): number {
@@ -219,20 +247,20 @@ function businessTime(dayStart: number): number {
   return dayStart + hour * HOUR + int(0, 59) * MIN + int(0, 59) * 1000
 }
 
-export const payments: Payment[] = []
-export const refunds: Refund[] = []
+export const payments: PaymentRow[] = []
+export const refunds: RefundRow[] = []
 export const webhookDeliveries: WebhookDelivery[] = []
 
 let orderSeq = 1
 
-function createPayment(createdMs: number): Payment {
+function createPayment(createdMs: number): PaymentRow {
   const age = NOW - createdMs
   const channel = weighted<PaymentChannel>([
     ['WECHAT', 52],
     ['ALIPAY', 40],
     ['UNIONPAY', 8],
   ])
-  const method = weighted(METHODS[channel])
+  const method = weighted(METHODS[channel] ?? [['QR', 1]])
   const amount = randomAmount()
   const storeId = weighted(STORE_WEIGHTS)
   const store = stores.find((s) => s.id === storeId)!
@@ -258,6 +286,11 @@ function createPayment(createdMs: number): Payment {
 
   return {
     id: `P${stamp(d)}${pad(seq % 100000, 5)}`,
+    source: 'API',
+    scope: weighted<string>([
+      [APP_SCOPES[0]!, 80],
+      [APP_SCOPES[1]!, 20],
+    ]),
     merchantOrderNo: `SO${stamp(d).slice(2)}${pad(int(0, 9999), 4)}`,
     storeId,
     storeName: store.name,
@@ -267,6 +300,7 @@ function createPayment(createdMs: number): Payment {
     channel,
     method,
     status,
+    coreStatus: status,
     createdAt: iso(createdMs),
     submittedAt: submittedMs ? iso(submittedMs) : null,
     paidAt: paidMs ? iso(paidMs) : null,
@@ -274,10 +308,14 @@ function createPayment(createdMs: number): Payment {
     failedAt: failedMs ? iso(failedMs) : null,
     failReason: status === 'FAILED' ? pick(FAIL_REASONS) : null,
     expireAt: iso(createdMs + PAY_EXPIRE),
-    refundedAmount: 0,
-    refundingAmount: 0,
+    refundedAmount: 0n,
+    refundingAmount: 0n,
     refundAggregate: 'NONE',
     refundCount: 0,
+    refundPrincipalLimit: null,
+    availableRefundAmount: null,
+    refundEligibility: null,
+    collectionVerification: null,
   }
 }
 
@@ -321,7 +359,7 @@ function progressFor(status: RefundStatus, createdMs: number, finishedMs: number
   return ev
 }
 
-export function buildRefund(p: Payment, amount: number, createdMs: number, status: RefundStatus, reason: string): Refund {
+export function buildRefund(p: PaymentRow, amount: bigint, createdMs: number, status: RefundStatus, reason: string): RefundRow {
   const finishedMs =
     status === 'SUCCESS' || status === 'FAILED' || status === 'CLOSED'
       ? Math.min(createdMs + int(30, 3 * 3600) * 1000, NOW)
@@ -333,6 +371,7 @@ export function buildRefund(p: Payment, amount: number, createdMs: number, statu
     id: `R${stamp(d)}${pad(seq % 100000, 5)}`,
     merchantRefundNo: `MR${stamp(d).slice(2)}${pad(int(0, 999), 3)}`,
     paymentId: p.id,
+    scope: p.scope,
     merchantOrderNo: p.merchantOrderNo,
     storeId: p.storeId,
     storeName: p.storeName,
@@ -375,17 +414,19 @@ for (const p of payments) {
   ])
   const window = Math.min(NOW - paidMs, 5 * DAY)
   const firstMs = paidMs + Math.floor(rand() * window * 0.6) + MIN
-  const amounts =
+  const total = Number(p.amount)
+  const amounts = (
     plan === 'full'
-      ? [p.amount]
+      ? [total]
       : plan === 'partial'
-        ? [Math.max(100, Math.round((p.amount * (0.15 + rand() * 0.5)) / 10) * 10)]
-        : [Math.round((p.amount * 0.3) / 10) * 10, Math.round((p.amount * 0.25) / 10) * 10]
+        ? [Math.max(100, Math.round((total * (0.15 + rand() * 0.5)) / 10) * 10)]
+        : [Math.round((total * 0.3) / 10) * 10, Math.round((total * 0.25) / 10) * 10]
+  ).map((n) => BigInt(n))
 
-  let used = 0
+  let used = 0n
   let t = firstMs
   for (const amt of amounts) {
-    if (amt <= 0 || used + amt > p.amount || t > NOW) break
+    if (amt <= 0n || used + amt > p.amount || t > NOW) break
     const status = refundStatusFor(t)
     const r = buildRefund(p, amt, t, status, pick(REFUND_REASONS))
     refunds.push(r)
@@ -393,20 +434,123 @@ for (const p of payments) {
     t += int(10, 600) * MIN
   }
 }
+/* ------------------------------------------------------------------ */
+/* 固定演示数据：外部来源、大金额、未知枚举、SUSPENDED 占额、需复核           */
+/* ------------------------------------------------------------------ */
+
+function fixture(overrides: Partial<PaymentRow>, minutesAgo: number): PaymentRow {
+  const base = createPayment(NOW - minutesAgo * MIN)
+  return { ...base, ...overrides }
+}
+
+const successBase = (ms: number) => ({
+  status: 'SUCCESS',
+  coreStatus: 'SUCCESS',
+  submittedAt: iso(ms + 2000),
+  paidAt: iso(ms + 20000),
+  closedAt: null,
+  failedAt: null,
+  failReason: null,
+})
+
+const FX_TIME = (m: number) => NOW - m * MIN
+
+export const fixtures = {
+  external: fixture(
+    {
+      ...successBase(FX_TIME(95)),
+      source: 'EXTERNAL',
+      merchantOrderNo: null,
+      storeId: null,
+      storeName: null,
+      expireAt: null,
+      subject: '外部渠道入账交易',
+      amount: 3680n,
+      paidAmount: 3680n,
+    },
+    95,
+  ),
+  large: fixture(
+    {
+      status: 'CLOSED',
+      coreStatus: 'CLOSED',
+      subject: '大额对公结算（演示超出双精度的金额）',
+      amount: 9007199254740993n,
+      paidAmount: null,
+      paidAt: null,
+      failReason: null,
+      closedAt: iso(FX_TIME(130) + PAY_EXPIRE),
+    },
+    130,
+  ),
+  unknownEnum: fixture(
+    {
+      ...successBase(FX_TIME(160)),
+      channel: 'PAYPAL_X',
+      method: 'FACE_PAY',
+      status: 'REVERSED',
+      coreStatus: 'REVERSED',
+      refundEligibility: 'FROZEN',
+      collectionVerification: 'MANUAL_CHECK',
+      availableRefundAmount: null,
+      refundPrincipalLimit: null,
+      pinnedEligibility: true,
+      subject: '新渠道试点交易（未知枚举演示）',
+    },
+    160,
+  ),
+  suspended: fixture({ ...successBase(FX_TIME(200)), amount: 10000n, paidAmount: 10000n, subject: '异常退款占额演示' }, 200),
+  review: fixture(
+    {
+      ...successBase(FX_TIME(230)),
+      amount: 25800n,
+      paidAmount: 25800n,
+      refundEligibility: 'REVIEW_REQUIRED',
+      collectionVerification: 'REVIEW_REQUIRED',
+      refundPrincipalLimit: 25800n,
+      availableRefundAmount: null,
+      pinnedEligibility: true,
+      subject: '入账待复核交易',
+    },
+    230,
+  ),
+}
+
+payments.push(...Object.values(fixtures))
+payments.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+refunds.push(buildRefund(fixtures.suspended, 6000n, FX_TIME(190), 'SUSPENDED', '顾客不满意退货'))
 refunds.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 
-export function recomputePayment(p: Payment) {
+const TERMINAL_REFUND_PENDING: RefundStatus[] = ['CREATED', 'PROCESSING', 'SUSPENDED']
+
+/** 模拟核心：汇总退款、映射核心状态并给出权威可退金额与退款资格 */
+export function recomputePayment(p: PaymentRow) {
   const related = refunds.filter((r) => r.paymentId === p.id)
   p.refundCount = related.length
-  p.refundedAmount = related.filter((r) => r.status === 'SUCCESS').reduce((s, r) => s + r.amount, 0)
-  p.refundingAmount = related
-    .filter((r) => r.status === 'CREATED' || r.status === 'PROCESSING' || r.status === 'SUSPENDED')
-    .reduce((s, r) => s + r.amount, 0)
-  p.refundAggregate = p.refundedAmount === 0 ? 'NONE' : p.refundedAmount >= p.amount ? 'FULL' : 'PARTIAL'
+  p.refundedAmount = related.filter((r) => r.status === 'SUCCESS').reduce((s, r) => s + r.amount, 0n)
+  p.refundingAmount = related.filter((r) => TERMINAL_REFUND_PENDING.includes(r.status)).reduce((s, r) => s + r.amount, 0n)
+  p.refundAggregate = p.refundedAmount === 0n ? 'NONE' : p.refundedAmount >= p.amount ? 'FULL' : 'PARTIAL'
+  if (p.status === 'SUCCESS') {
+    p.coreStatus = p.refundAggregate === 'FULL' ? 'REFUNDED' : p.refundAggregate === 'PARTIAL' ? 'PART_REFUNDED' : 'SUCCESS'
+  }
+  if (p.pinnedEligibility) return
+  if (p.status !== 'SUCCESS') {
+    p.refundPrincipalLimit = null
+    p.availableRefundAmount = null
+    p.refundEligibility = 'NOT_COLLECTED'
+    p.collectionVerification = p.status === 'FAILED' || p.status === 'CLOSED' ? null : 'PENDING'
+    return
+  }
+  const occupied = related.filter((r) => COUNTED_REFUND.includes(r.status)).reduce((s, r) => s + r.amount, 0n)
+  const available = p.amount - occupied > 0n ? p.amount - occupied : 0n
+  p.refundPrincipalLimit = p.amount
+  p.availableRefundAmount = available
+  p.refundEligibility = available > 0n ? 'ALLOWED' : 'EXHAUSTED'
+  p.collectionVerification = 'VERIFIED'
 }
 
 export const paymentIndex = new Map(payments.map((p) => [p.id, p]))
-for (const r of refunds) recomputePayment(paymentIndex.get(r.paymentId)!)
+for (const p of payments) recomputePayment(p)
 
 /* ------------------------------------------------------------------ */
 /* 应用、密钥、Webhook                                                   */
@@ -520,21 +664,21 @@ export const webhookConfigs: WebhookConfig[] = [
     appId: 'app_9f3c2a71d40e8b15',
     url: 'https://pos.yunqi-mart.example/api/payhub/notify',
     enabled: true,
-    events: ['payment.succeeded', 'payment.failed', 'payment.closed', 'refund.succeeded', 'refund.failed', 'refund.closed'],
+    events: ['PAYMENT.SUCCEEDED', 'PAYMENT.FAILED', 'PAYMENT.CLOSED', 'REFUND.SUCCEEDED', 'REFUND.FAILED', 'REFUND.CLOSED'],
     updatedAt: iso(NOW - 30 * DAY),
   },
   {
     appId: 'app_51be07c6a92f3d48',
     url: 'https://mp.yunqi-mart.example/webhook/pay',
     enabled: true,
-    events: ['payment.succeeded', 'refund.succeeded'],
+    events: ['PAYMENT.SUCCEEDED', 'REFUND.SUCCEEDED'],
     updatedAt: iso(NOW - 60 * DAY),
   },
   {
     appId: 'app_sbx_7d21e4f09c3a',
     url: 'https://dev.yunqi-mart.example/notify',
     enabled: false,
-    events: ['payment.succeeded', 'refund.succeeded'],
+    events: ['PAYMENT.SUCCEEDED', 'REFUND.SUCCEEDED'],
     updatedAt: iso(NOW - 10 * DAY),
   },
   {
@@ -542,7 +686,7 @@ export const webhookConfigs: WebhookConfig[] = [
     url: '',
     enabled: false,
     events: [],
-    updatedAt: iso(NOW - 200 * DAY),
+    updatedAt: null,
   },
 ]
 
@@ -601,6 +745,7 @@ export function buildDelivery(
     lastAttemptAt: attemptLog[attemptLog.length - 1]!.at,
     nextRetryAt: status === 'RETRYING' ? iso(NOW + int(2, 25) * MIN) : null,
     attemptLog,
+    isTest: false,
   }
 }
 
@@ -609,11 +754,11 @@ for (const p of payments) {
   const created = new Date(p.createdAt).getTime()
   if (NOW - created > WEBHOOK_WINDOW) break
   if (p.status === 'SUCCESS' && p.paidAt) {
-    webhookDeliveries.push(buildDelivery('payment', p.id, 'payment.succeeded', new Date(p.paidAt).getTime() + 800))
+    webhookDeliveries.push(buildDelivery('payment', p.id, 'PAYMENT.SUCCEEDED', new Date(p.paidAt).getTime() + 800))
   } else if (p.status === 'CLOSED' && p.closedAt) {
-    webhookDeliveries.push(buildDelivery('payment', p.id, 'payment.closed', new Date(p.closedAt).getTime() + 800))
+    webhookDeliveries.push(buildDelivery('payment', p.id, 'PAYMENT.CLOSED', new Date(p.closedAt).getTime() + 800))
   } else if (p.status === 'FAILED' && p.failedAt) {
-    webhookDeliveries.push(buildDelivery('payment', p.id, 'payment.failed', new Date(p.failedAt).getTime() + 800))
+    webhookDeliveries.push(buildDelivery('payment', p.id, 'PAYMENT.FAILED', new Date(p.failedAt).getTime() + 800))
   }
 }
 for (const r of refunds) {
@@ -621,8 +766,14 @@ for (const r of refunds) {
   const ms = new Date(r.finishedAt).getTime()
   if (NOW - ms > WEBHOOK_WINDOW) continue
   const type: WebhookEventType =
-    r.status === 'SUCCESS' ? 'refund.succeeded' : r.status === 'FAILED' ? 'refund.failed' : 'refund.closed'
+    r.status === 'SUCCESS' ? 'REFUND.SUCCEEDED' : r.status === 'FAILED' ? 'REFUND.FAILED' : 'REFUND.CLOSED'
   webhookDeliveries.push(buildDelivery('refund', r.id, type, ms + 800))
+}
+for (const r of refunds) {
+  if (r.status !== 'SUSPENDED') continue
+  const ms = new Date(r.updatedAt).getTime()
+  if (NOW - ms > WEBHOOK_WINDOW) continue
+  webhookDeliveries.push(buildDelivery('refund', r.id, 'REFUND.SUSPENDED', ms + 800))
 }
 webhookDeliveries.sort((a, b) => b.lastAttemptAt.localeCompare(a.lastAttemptAt))
 

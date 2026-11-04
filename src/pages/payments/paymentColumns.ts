@@ -5,7 +5,7 @@ import MoneyDisplay from '@/components/business/MoneyDisplay.vue'
 import ChannelBadge from '@/components/business/ChannelBadge.vue'
 import PaymentStatusBadge from '@/components/business/PaymentStatusBadge.vue'
 import RefundAggregateBadge from '@/components/business/RefundAggregateBadge.vue'
-import { METHOD } from '@/utils/dictionaries'
+import { methodLabel } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 import type { Payment } from '@/types'
 
@@ -48,13 +48,14 @@ export function buildPaymentColumns(opts: { sortable?: boolean; include?: Paymen
       id: 'merchantOrderNo',
       header: PAYMENT_COLUMN_LABELS.merchantOrderNo,
       enableSorting: false,
-      cell: ({ row }) => h(OrderNumber, { value: row.original.merchantOrderNo, muted: true }),
+      cell: ({ row }) =>
+        row.original.merchantOrderNo ? h(OrderNumber, { value: row.original.merchantOrderNo, muted: true }) : muted('—'),
     },
     {
       id: 'storeName',
       header: PAYMENT_COLUMN_LABELS.storeName,
       enableSorting: false,
-      cell: ({ row }) => h('span', { class: 'whitespace-nowrap' }, row.original.storeName),
+      cell: ({ row }) => row.original.storeName ? h('span', { class: 'whitespace-nowrap' }, row.original.storeName) : muted('—'),
     },
     {
       id: 'amount',
@@ -77,7 +78,7 @@ export function buildPaymentColumns(opts: { sortable?: boolean; include?: Paymen
       id: 'method',
       header: PAYMENT_COLUMN_LABELS.method,
       enableSorting: false,
-      cell: ({ row }) => muted(METHOD[row.original.method]),
+      cell: ({ row }) => muted(methodLabel(row.original.method)),
     },
     {
       id: 'status',

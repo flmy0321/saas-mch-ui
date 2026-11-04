@@ -8,7 +8,7 @@ import { cn } from '@/utils/cn'
 const props = defineProps<{
   label: string
   value?: string
-  delta?: number
+  delta?: number | null
   deltaLabel?: string
   /** 为 true 时，增长代表负面（如退款金额） */
   invertDelta?: boolean
@@ -50,8 +50,9 @@ const good = computed(() => (props.delta ?? 0) >= 0 !== !!props.invertDelta)
         <slot name="value">{{ value }}</slot>
       </p>
       <p class="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span v-if="delta === null" class="font-medium tabular" title="对比基数为 0，无法计算变化">—</span>
         <span
-          v-if="delta !== undefined"
+          v-else-if="delta !== undefined"
           :class="cn('inline-flex items-center gap-0.5 font-medium tabular', good ? 'text-success' : 'text-danger')"
         >
           <TrendingUp v-if="delta >= 0" class="size-3.5" aria-hidden="true" />

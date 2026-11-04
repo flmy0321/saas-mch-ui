@@ -17,9 +17,10 @@ import { useTradeCharts, type SeriesPoint } from '@/composables/useTradeCharts'
 import { buildPaymentColumns } from '@/pages/payments/paymentColumns'
 import { useSessionStore } from '@/stores/session'
 import { api } from '@/services/api'
-import { CHANNEL } from '@/utils/dictionaries'
+import { channelMeta } from '@/utils/dictionaries'
 import { formatMoney, formatNumber, formatPercent, toDateInput } from '@/utils/format'
-import type { Payment } from '@/types'
+import { fenToAmount, toFen } from '@/utils/money'
+import type { ChannelShare, Payment } from '@/types'
 
 const router = useRouter()
 const { user } = storeToRefs(useSessionStore())
@@ -32,7 +33,7 @@ const share = useAsync(() => api.dashboard.channelShare(days.value), { watch: da
 const recent = useAsync(() => api.dashboard.recentPayments(8))
 
 const points = computed<SeriesPoint[]>(() =>
-  (trend.data.value ?? []).map((p) => ({ ...p, label: p.date.slice(5).replace('-', '/') })),
+  (trend.data.value?.points ?? []).map((p) => ({ ...p, label: p.date.slice(5).replace('-', '/') })),
 )
 const windowed = computed(() => points.value.slice(-days.value))
 
@@ -40,9 +41,15 @@ const charts = useTradeCharts()
 const trendOption = charts.amountTrend(windowed, metric)
 const rateOption = charts.successRate(points)
 const compareOption = charts.payVsRefund(windowed)
-const shares = computed(() => share.data.value ?? [])
+const shares = computed<ChannelShare[]>(() => share.data.value?.items ?? [])
 const donutOption = charts.channelDonut(shares)
-const shareTotal = computed(() => shares.value.reduce((s, c) => s + c.amount, 0))
+const shareTotalFen = computed(() => shares.value.reduce((s, c) => s + (toFen(c.amount) ?? 0n), 0n))
+const shareTotal = computed(() => fenToAmount(shareTotalFen.value))
+const sharePercent = (amount: string) => {
+  const part = toFen(amount)
+  if (!shareTotalFen.value || part === null) return '-'
+  return formatPercent(Number((part * 10000n) / shareTotalFen.value) / 10000, 1)
+}
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -179,10 +186,10 @@ const dayOptions = [
           </div>
           <ul class="mt-3 flex flex-col gap-2">
             <li v-for="c in shares" :key="c.channel" class="flex items-center gap-2 text-[13px]">
-              <span class="size-2 rounded-sm" :style="{ background: charts.colors.value[c.channel === 'ALIPAY' ? 'chart1' : c.channel === 'WECHAT' ? 'chart2' : 'chart3'] }" />
-              <span class="flex-1">{{ CHANNEL[c.channel].label }}</span>
+              <span class="size-2 rounded-sm" :style="{ background: c.channel === 'ALIPAY' ? charts.colors.value.chart1 : c.channel === 'WECHAT' ? charts.colors.value.chart2 : c.channel === 'UNIONPAY' ? charts.colors.value.chart3 : channelMeta(c.channel).color }" />
+              <span class="flex-1">{{ channelMeta(c.channel).label }}</span>
               <span class="text-muted-foreground tabular">{{ formatNumber(c.count) }} 笔</span>
-              <span class="w-14 text-right font-medium tabular">{{ shareTotal ? formatPercent(c.amount / shareTotal, 1) : '-' }}</span>
+              <span class="w-14 text-right font-medium tabular">{{ sharePercent(c.amount) }}</span>
             </li>
           </ul>
         </div>

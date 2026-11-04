@@ -1,17 +1,19 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import StatusBadge from '@/components/ui/StatusBadge.vue'
 import Tooltip from '@/components/ui/Tooltip.vue'
-import { REFUND_STATUS } from '@/utils/dictionaries'
+import { refundStatusMeta } from '@/utils/dictionaries'
 import type { RefundStatus } from '@/types'
 
-defineProps<{ status: RefundStatus }>()
+const props = defineProps<{ status: RefundStatus }>()
+const meta = computed(() => refundStatusMeta(props.status))
 </script>
 
 <template>
-  <Tooltip v-if="status === 'SUSPENDED'" :content="REFUND_STATUS.SUSPENDED.description!">
+  <Tooltip v-if="meta.description && (status === 'SUSPENDED' || meta.tone === 'neutral')" :content="meta.description">
     <span tabindex="0" class="inline-flex rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
-      <StatusBadge :tone="REFUND_STATUS[status].tone">{{ REFUND_STATUS[status].label }}</StatusBadge>
+      <StatusBadge :tone="meta.tone">{{ meta.label }}</StatusBadge>
     </span>
   </Tooltip>
-  <StatusBadge v-else :tone="REFUND_STATUS[status].tone">{{ REFUND_STATUS[status].label }}</StatusBadge>
+  <StatusBadge v-else :tone="meta.tone">{{ meta.label }}</StatusBadge>
 </template>

@@ -17,7 +17,7 @@ import TransactionTimeline, { type TimelineStep } from '@/components/business/Tr
 import WebhookDeliveryList from '@/components/business/WebhookDeliveryList.vue'
 import { useAsync } from '@/composables/useAsync'
 import { api } from '@/services/api'
-import { REFUND_STATUS } from '@/utils/dictionaries'
+import { refundStatusMeta } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 
 const route = useRoute()
@@ -32,7 +32,7 @@ const steps = computed<TimelineStep[]>(() => {
   if (!x) return []
   const last = x.progress.length - 1
   return x.progress.map((e, i) => ({
-    title: REFUND_STATUS[e.status].label,
+    title: refundStatusMeta(e.status).label,
     at: e.at,
     note: e.note,
     state:

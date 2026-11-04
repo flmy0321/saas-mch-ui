@@ -17,7 +17,7 @@ import OrderNumber from '@/components/business/OrderNumber.vue'
 import { useAsync } from '@/composables/useAsync'
 import { useQueryFilters } from '@/composables/useQueryFilters'
 import { api } from '@/services/api'
-import { WEBHOOK_EVENT, WEBHOOK_STATUS, toOptions } from '@/utils/dictionaries'
+import { WEBHOOK_EVENT, WEBHOOK_STATUS, webhookEventLabel, toOptions } from '@/utils/dictionaries'
 import { formatDateTime, formatNumber } from '@/utils/format'
 import type { WebhookDelivery, WebhookDeliveryStatus, WebhookEventType } from '@/types'
 
@@ -51,7 +51,7 @@ const columns: ColumnDef<WebhookDelivery>[] = [
     cell: ({ row }) =>
       h('div', { class: 'flex flex-col' }, [
         h('span', { class: 'font-mono text-[13px]' }, row.original.eventType),
-        h('span', { class: 'text-xs text-muted-foreground' }, WEBHOOK_EVENT[row.original.eventType]),
+        h('span', { class: 'text-xs text-muted-foreground' }, webhookEventLabel(row.original.eventType)),
       ]),
   },
   {
@@ -122,7 +122,7 @@ const detailItems = computed(() => {
       </div>
     </Card>
 
-    <Drawer v-model:open="drawerOpen" title="通知详情" :description="selected ? WEBHOOK_EVENT[selected.eventType] : ''">
+    <Drawer v-model:open="drawerOpen" title="通知详情" :description="selected ? webhookEventLabel(selected.eventType) : ''">
       <div v-if="selected" class="flex flex-col gap-6">
         <div class="flex items-center gap-2">
           <WebhookStatusBadge :status="selected.status" />

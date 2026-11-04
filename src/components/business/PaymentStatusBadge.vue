@@ -1,13 +1,13 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import StatusBadge from '@/components/ui/StatusBadge.vue'
-import { PAYMENT_STATUS } from '@/utils/dictionaries'
+import { paymentStatusMeta } from '@/utils/dictionaries'
 import type { PaymentStatus } from '@/types'
 
-defineProps<{ status: PaymentStatus }>()
+const props = defineProps<{ status: PaymentStatus }>()
+const meta = computed(() => paymentStatusMeta(props.status))
 </script>
 
 <template>
-  <StatusBadge :tone="PAYMENT_STATUS[status].tone" :title="PAYMENT_STATUS[status].description">
-    {{ PAYMENT_STATUS[status].label }}
-  </StatusBadge>
+  <StatusBadge :tone="meta.tone" :title="meta.description">{{ meta.label }}</StatusBadge>
 </template>

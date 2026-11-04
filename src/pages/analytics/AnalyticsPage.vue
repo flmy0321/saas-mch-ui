@@ -18,6 +18,7 @@ import { useTradeCharts, type SeriesPoint } from '@/composables/useTradeCharts'
 import { api } from '@/services/api'
 import { CHANNEL, toOptions } from '@/utils/dictionaries'
 import { formatMoney, formatNumber, formatPercent, toDateInput } from '@/utils/format'
+import { toFen } from '@/utils/money'
 import type { AnalyticsBucket, Granularity, PaymentChannel } from '@/types'
 
 const end = new Date()
@@ -62,8 +63,16 @@ const donutOption = charts.channelDonut(shares)
 
 const storeRank = computed(() => {
   const rows = result.data.value?.byStore ?? []
-  const max = Math.max(1, ...rows.map((r) => r.amount))
-  return rows.map((r) => ({ ...r, ratio: r.amount / max }))
+  const fens = rows.map((r) => toFen(r.amount) ?? 0n)
+  const max = fens.reduce((m, f) => (f > m ? f : m), 1n)
+  return rows.map((r, i) => ({ ...r, ratio: Number(((fens[i] ?? 0n) * 10000n) / max) / 10000 }))
+})
+
+const refundRate = computed(() => {
+  const success = toFen(t.value?.successAmount)
+  const refund = toFen(t.value?.refundAmount)
+  if (!success || refund === null) return '—'
+  return formatPercent(Number((refund * 1000000n) / success) / 1000000)
 })
 
 const right = (text: string) => h('span', { class: 'tabular whitespace-nowrap' }, text)
@@ -146,7 +155,7 @@ const tableRows = computed(() => [...(result.data.value?.buckets ?? [])].reverse
         label="退款率"
         hint="退款金额 / 成功金额"
         :loading="loading"
-        :value="t ? formatPercent(t.successAmount ? t.refundAmount / t.successAmount : 0) : undefined"
+        :value="t ? refundRate : undefined"
       />
     </section>
 

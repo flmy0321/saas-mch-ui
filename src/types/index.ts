@@ -1,15 +1,47 @@
-/** 金额在数据层统一以「分」为整数传输，展示层统一转换为人民币元。 */
-export type AmountFen = number
+/**
+ * 金额：元十进制字符串（协议 1.1 方案 A）。
+ * 输出恰好两位小数，如 "128.00"；输入允许 0~2 位小数。运算统一使用 `@/utils/money`。
+ */
+export type AmountDecimal = string
+
+/** 服务端可能返回本文未列出的新枚举值，类型层保留原始字符串 */
+type Open<T extends string> = T | (string & {})
 
 export type AppEnv = 'production' | 'sandbox'
 
-export type PaymentStatus = 'CREATED' | 'PAYING' | 'CLOSING' | 'SUCCESS' | 'FAILED' | 'CLOSED'
-export type RefundStatus = 'CREATED' | 'PROCESSING' | 'SUCCESS' | 'FAILED' | 'CLOSED' | 'SUSPENDED'
-/** 退款聚合状态：与支付状态相互独立，仅描述该笔已成功支付订单的退款情况 */
+export type KnownPaymentStatus = 'CREATED' | 'PAYING' | 'CLOSING' | 'SUCCESS' | 'FAILED' | 'CLOSED'
+export type PaymentStatus = Open<KnownPaymentStatus>
+export type KnownRefundStatus = 'CREATED' | 'PROCESSING' | 'SUCCESS' | 'FAILED' | 'CLOSED' | 'SUSPENDED'
+export type RefundStatus = Open<KnownRefundStatus>
+/** 退款聚合状态：由核心状态映射，Portal 不自行计算 */
 export type RefundAggregateStatus = 'NONE' | 'PARTIAL' | 'FULL'
 
-export type PaymentChannel = 'WECHAT' | 'ALIPAY' | 'UNIONPAY'
-export type PaymentMethod = 'NATIVE' | 'JSAPI' | 'MINI_PROGRAM' | 'H5' | 'APP' | 'MICROPAY'
+export type KnownPaymentChannel = 'WECHAT' | 'ALIPAY' | 'UNIONPAY' | 'DCEP' | 'JD' | 'HUAWEI' | 'TIKTOK'
+export type PaymentChannel = Open<KnownPaymentChannel>
+export type KnownPaymentMethod =
+  | 'QR'
+  | 'MINI_PROGRAM'
+  | 'OFFICIAL_ACCOUNT'
+  | 'H5'
+  | 'SDK'
+  | 'JS'
+  | 'MERCHANT_SCAN'
+  | 'STATIC_QR'
+  | 'POS'
+export type PaymentMethod = Open<KnownPaymentMethod>
+/** 【待核对】取值以核心为准 */
+export type PaymentSource = Open<'API' | 'EXTERNAL'>
+
+export type KnownRefundEligibility =
+  | 'NOT_COLLECTED'
+  | 'REVIEW_REQUIRED'
+  | 'RULE_UNVERIFIED'
+  | 'BLOCKED'
+  | 'EXHAUSTED'
+  | 'ALLOWED'
+export type RefundEligibility = Open<KnownRefundEligibility>
+export type KnownCollectionVerification = 'PENDING' | 'VERIFIED' | 'REVIEW_REQUIRED'
+export type CollectionVerification = Open<KnownCollectionVerification>
 
 export type StoreStatus = 'ACTIVE' | 'DISABLED'
 
@@ -27,26 +59,36 @@ export interface Store {
 
 export interface Payment {
   id: string
-  merchantOrderNo: string
-  storeId: string
-  storeName: string
+  source: PaymentSource
+  merchantOrderNo: string | null
+  storeId: string | null
+  storeName: string | null
   subject: string
-  amount: AmountFen
-  paidAmount: AmountFen | null
+  amount: AmountDecimal
+  paidAmount: AmountDecimal | null
   channel: PaymentChannel
   method: PaymentMethod
+  /** 网页视图状态（核心 PART_REFUNDED / REFUNDED 映射为 SUCCESS） */
   status: PaymentStatus
+  /** 核心原始状态，便于排查 */
+  coreStatus: string
   createdAt: string
   submittedAt: string | null
   paidAt: string | null
   closedAt: string | null
   failedAt: string | null
   failReason: string | null
-  expireAt: string
-  refundedAmount: AmountFen
-  refundingAmount: AmountFen
+  expireAt: string | null
+  /** 展示用，不得用于判断能否退款 */
+  refundedAmount: AmountDecimal
+  /** 占用中的退款金额（CREATED + PROCESSING + SUSPENDED），展示用 */
+  refundingAmount: AmountDecimal
   refundAggregate: RefundAggregateStatus
   refundCount: number
+  refundPrincipalLimit: AmountDecimal | null
+  availableRefundAmount: AmountDecimal | null
+  refundEligibility: RefundEligibility | null
+  collectionVerification: CollectionVerification | null
 }
 
 export interface RefundProgressEvent {
@@ -59,11 +101,11 @@ export interface Refund {
   id: string
   merchantRefundNo: string
   paymentId: string
-  merchantOrderNo: string
-  storeId: string
-  storeName: string
+  merchantOrderNo: string | null
+  storeId: string | null
+  storeName: string | null
   channel: PaymentChannel
-  amount: AmountFen
+  amount: AmountDecimal
   status: RefundStatus
   reason: string
   createdAt: string
@@ -73,15 +115,21 @@ export interface Refund {
   progress: RefundProgressEvent[]
 }
 
-export type WebhookEventType =
-  | 'payment.succeeded'
-  | 'payment.failed'
-  | 'payment.closed'
-  | 'refund.succeeded'
-  | 'refund.failed'
-  | 'refund.closed'
+/**
+ * 核心 merchant_event Schema 的 eventType（7 个，含 REFUND.SUSPENDED）。
+ * 【待核对】完整取值以锁定 Schema 为准；当前列表为 Mock 演示值。
+ */
+export type KnownWebhookEventType =
+  | 'PAYMENT.SUCCEEDED'
+  | 'PAYMENT.FAILED'
+  | 'PAYMENT.CLOSED'
+  | 'REFUND.SUCCEEDED'
+  | 'REFUND.FAILED'
+  | 'REFUND.CLOSED'
+  | 'REFUND.SUSPENDED'
+export type WebhookEventType = Open<KnownWebhookEventType>
 
-export type WebhookDeliveryStatus = 'SUCCESS' | 'FAILED' | 'RETRYING'
+export type WebhookDeliveryStatus = Open<'SUCCESS' | 'FAILED' | 'RETRYING'>
 
 export interface WebhookAttempt {
   attempt: number
@@ -105,6 +153,8 @@ export interface WebhookDelivery {
   lastAttemptAt: string
   nextRetryAt: string | null
   attemptLog: WebhookAttempt[]
+  /** 测试投递标识，不写入正式事件 Schema */
+  isTest: boolean
 }
 
 export type AppStatus = 'ACTIVE' | 'DISABLED'
@@ -144,7 +194,8 @@ export interface WebhookConfig {
   url: string
   enabled: boolean
   events: WebhookEventType[]
-  updatedAt: string
+  /** 从未配置为 null */
+  updatedAt: string | null
 }
 
 export interface Merchant {
@@ -166,6 +217,7 @@ export interface CurrentUser {
   name: string
   email: string
   phone: string
+  /** 仅用于展示，不得据此推导授权 */
   role: string
   lastLoginAt: string
   lastLoginIp: string
@@ -282,49 +334,79 @@ export interface StoreInput {
 
 export interface CreateRefundInput {
   paymentId: string
-  amount: AmountFen
+  /** 输入格式：0~2 位小数的元字符串 */
+  amount: string
   merchantRefundNo: string
   reason: string
 }
 
 export interface RefundableInfo {
   paymentId: string
-  paymentAmount: AmountFen
-  refundedAmount: AmountFen
-  refundingAmount: AmountFen
-  refundableAmount: AmountFen
+  paymentAmount: AmountDecimal
+  refundedAmount: AmountDecimal
+  refundingAmount: AmountDecimal
+  refundPrincipalLimit: AmountDecimal | null
+  /** 权威可退金额；未知为 null */
+  refundableAmount: AmountDecimal | null
+  refundEligibility: RefundEligibility | null
+  ineligibleReason: string | null
+  asOf: string
 }
 
+/** 统计比较值：分母为 0 时为 null，展示为“—” */
+export type CompareValue = number | null
+
 export interface DashboardSummary {
-  todaySuccessAmount: AmountFen
+  asOf: string
+  todaySuccessAmount: AmountDecimal
   todaySuccessCount: number
-  todayRefundAmount: AmountFen
+  todayRefundAmount: AmountDecimal
   todayRefundCount: number
+  todayTotalCount: number
+  todayTerminalCount: number
+  todayCreatedSuccessCount: number
   todaySuccessRate: number
   processingCount: number
   compare: {
-    successAmount: number
-    successCount: number
-    refundAmount: number
-    refundCount: number
-    successRate: number
+    successAmount: CompareValue
+    successCount: CompareValue
+    refundAmount: CompareValue
+    refundCount: CompareValue
+    successRate: CompareValue
   }
 }
 
-export interface TrendPoint {
-  date: string
-  successAmount: AmountFen
+/** 集合 P（成功金额/笔数）、R（退款）、C（总数/终态/成功率）分开计算，见协议 5.1 */
+export interface StatMetrics {
+  successAmount: AmountDecimal
   successCount: number
-  refundAmount: AmountFen
+  refundAmount: AmountDecimal
   refundCount: number
   totalCount: number
+  terminalCount: number
+  createdSuccessCount: number
   successRate: number
+}
+
+export interface TrendPoint extends StatMetrics {
+  /** YYYY-MM-DD，唯一 key */
+  date: string
+}
+
+export interface TrendReport {
+  asOf: string
+  points: TrendPoint[]
 }
 
 export interface ChannelShare {
   channel: PaymentChannel
-  amount: AmountFen
+  amount: AmountDecimal
   count: number
+}
+
+export interface ChannelShareReport {
+  asOf: string
+  items: ChannelShare[]
 }
 
 export type Granularity = 'day' | 'week' | 'month'
@@ -337,28 +419,32 @@ export interface AnalyticsQuery {
   channel?: PaymentChannel
 }
 
-export interface AnalyticsBucket {
+export interface AnalyticsTotals extends StatMetrics {
+  avgAmount: AmountDecimal
+}
+
+export interface AnalyticsBucket extends AnalyticsTotals {
+  /** 唯一完整日期 key（day/week: YYYY-MM-DD，month: YYYY-MM） */
+  key: string
+  start: string
+  end: string
+  /** 仅用于展示 */
   label: string
-  successAmount: AmountFen
-  successCount: number
-  refundAmount: AmountFen
-  refundCount: number
-  totalCount: number
-  successRate: number
-  avgAmount: AmountFen
 }
 
 export interface AnalyticsResult {
-  totals: Omit<AnalyticsBucket, 'label'>
+  asOf: string
+  totals: AnalyticsTotals
   buckets: AnalyticsBucket[]
   byChannel: ChannelShare[]
-  byStore: { storeId: string; storeName: string; amount: AmountFen; count: number }[]
+  byStore: { storeId: string; storeName: string; amount: AmountDecimal; count: number }[]
 }
 
 export interface StoreStats {
-  last30Amount: AmountFen
+  asOf: string
+  last30Amount: AmountDecimal
   last30Count: number
-  last30RefundAmount: AmountFen
+  last30RefundAmount: AmountDecimal
   successRate: number
   trend: TrendPoint[]
 }

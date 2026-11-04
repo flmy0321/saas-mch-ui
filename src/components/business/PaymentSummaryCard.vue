@@ -4,7 +4,7 @@ import PaymentStatusBadge from './PaymentStatusBadge.vue'
 import RefundAggregateBadge from './RefundAggregateBadge.vue'
 import ChannelBadge from './ChannelBadge.vue'
 import OrderNumber from './OrderNumber.vue'
-import { METHOD } from '@/utils/dictionaries'
+import { methodLabel } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 import type { Payment } from '@/types'
 
@@ -36,7 +36,7 @@ defineProps<{ payment: Payment; linkable?: boolean }>()
         <dt class="text-muted-foreground">渠道 / 方式</dt>
         <dd class="mt-0.5 flex items-center gap-1.5">
           <ChannelBadge :channel="payment.channel" short />
-          <span class="text-muted-foreground">· {{ METHOD[payment.method] }}</span>
+          <span class="text-muted-foreground">· {{ methodLabel(payment.method) }}</span>
         </dd>
       </div>
       <div>

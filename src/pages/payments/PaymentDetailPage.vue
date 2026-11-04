@@ -23,8 +23,9 @@ import WebhookDeliveryList from '@/components/business/WebhookDeliveryList.vue'
 import { useAsync } from '@/composables/useAsync'
 import { buildRefundColumns } from '@/pages/refunds/refundColumns'
 import { api } from '@/services/api'
-import { METHOD } from '@/utils/dictionaries'
+import { methodLabel } from '@/utils/dictionaries'
 import { formatDateTime, formatMoney } from '@/utils/format'
+import { isPositiveAmount } from '@/utils/money'
 import type { Refund } from '@/types'
 
 const route = useRoute()
@@ -41,11 +42,20 @@ const refundOpen = ref(false)
 
 const notFound = computed(() => detail.error.value?.includes('不存在'))
 
-const canRefund = computed(() => p.value?.status === 'SUCCESS' && (info.data.value?.refundableAmount ?? 0) > 0)
+const canRefund = computed(
+  () =>
+    p.value?.status === 'SUCCESS' &&
+    info.data.value?.refundEligibility === 'ALLOWED' &&
+    isPositiveAmount(info.data.value.refundableAmount),
+)
 const refundDisabledReason = computed(() => {
   if (!p.value) return ''
   if (p.value.status !== 'SUCCESS') return '仅支付成功的订单可以发起退款'
-  if ((info.data.value?.refundableAmount ?? 0) <= 0) return '该订单已全额退款'
+  const i = info.data.value
+  if (!i) return '正在查询可退金额'
+  if (i.refundEligibility !== 'ALLOWED') return i.ineligibleReason ?? '该订单当前不可退款'
+  if (i.refundableAmount === null) return '可退金额暂不可确定'
+  if (!isPositiveAmount(i.refundableAmount)) return '该订单已无可退金额'
   return ''
 })
 
@@ -55,7 +65,7 @@ const steps = computed<TimelineStep[]>(() => {
   const s: TimelineStep[] = [{ title: '订单创建', at: x.createdAt, state: 'done' }]
   s.push(
     x.submittedAt
-      ? { title: '用户提交支付', at: x.submittedAt, state: 'done', note: `${METHOD[x.method]}` }
+      ? { title: '用户提交支付', at: x.submittedAt, state: 'done', note: `${methodLabel(x.method)}` }
       : { title: '用户提交支付', state: x.status === 'CREATED' ? 'current' : 'pending' },
   )
   if (x.status === 'SUCCESS') s.push({ title: '支付成功', at: x.paidAt, state: 'done', note: `实收 ${formatMoney(x.paidAmount)}` })
@@ -84,7 +94,7 @@ const baseItems = computed(() => {
     { key: 'subject', label: '商品描述', value: x.subject },
     { key: 'store', label: '门店', value: x.storeName },
     { key: 'channel', label: '支付渠道', value: x.channel },
-    { key: 'method', label: '支付方式', value: METHOD[x.method] },
+    { key: 'method', label: '支付方式', value: methodLabel(x.method) },
     { key: 'createdAt', label: '创建时间', value: formatDateTime(x.createdAt) },
     { key: 'paidAt', label: '支付时间', value: formatDateTime(x.paidAt) },
   ]
@@ -178,7 +188,8 @@ function onRefundCreated(r: Refund) {
                 <span class="flex items-center gap-1 font-mono text-[13px]">{{ item.value }}<CopyButton :value="item.value!" /></span>
               </template>
               <template #merchantOrderNo="{ item }">
-                <span class="flex items-center gap-1 font-mono text-[13px]">{{ item.value }}<CopyButton :value="item.value!" /></span>
+                <span v-if="item.value" class="flex items-center gap-1 font-mono text-[13px]">{{ item.value }}<CopyButton :value="item.value" /></span>
+                <span v-else class="text-muted-foreground">—</span>
               </template>
               <template #store>
                 <RouterLink :to="`/stores/${p.storeId}`" class="text-primary hover:underline">{{ p.storeName }}</RouterLink>

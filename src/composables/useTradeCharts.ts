@@ -1,18 +1,19 @@
 import { computed, type Ref } from 'vue'
 import { useChartTheme } from './useChartTheme'
-import { CHANNEL } from '@/utils/dictionaries'
-import { fenToYuan, formatMoney, formatNumber, formatPercent } from '@/utils/format'
-import type { ChannelShare } from '@/types'
+import { channelMeta } from '@/utils/dictionaries'
+import { formatNumber, formatPercent } from '@/utils/format'
+import { amountToChartNumber, formatMoney } from '@/utils/money'
+import type { AmountDecimal, ChannelShare } from '@/types'
 
 export interface SeriesPoint {
   label: string
-  successAmount: number
-  refundAmount: number
+  successAmount: AmountDecimal
+  refundAmount: AmountDecimal
   successCount: number
   successRate: number
 }
 
-type TooltipParam = { axisValueLabel: string; marker: string; seriesName: string; value: number }
+type TooltipParam = { axisValueLabel: string; marker: string; seriesName: string; value: number; dataIndex: number; seriesIndex: number }
 
 const row = (p: TooltipParam, value: string) =>
   `<div style="display:flex;gap:16px;justify-content:space-between;align-items:center;margin-top:4px">
@@ -34,7 +35,7 @@ export function useTradeCharts() {
           ...base.value.tooltip,
           formatter: (ps: TooltipParam[]) =>
             `<div style="font-size:12px"><div style="opacity:.7">${ps[0]?.axisValueLabel}</div>${ps
-              .map((p) => row(p, isAmount ? formatMoney(Math.round(p.value * 100)) : `${formatNumber(p.value)} 笔`))
+              .map((p) => row(p, isAmount ? formatMoney(points.value[p.dataIndex]?.successAmount) : `${formatNumber(p.value)} 笔`))
               .join('')}</div>`,
         },
         xAxis: { ...base.value.xAxis, type: 'category', boundaryGap: false, data: points.value.map((p) => p.label) },
@@ -54,7 +55,7 @@ export function useTradeCharts() {
             lineStyle: { width: 2, color: c.chart1 },
             itemStyle: { color: c.chart1 },
             areaStyle: { color: c.chart1, opacity: 0.08 },
-            data: points.value.map((p) => (isAmount ? fenToYuan(p.successAmount) : p.successCount)),
+            data: points.value.map((p) => (isAmount ? amountToChartNumber(p.successAmount) : p.successCount)),
           },
         ],
       }
@@ -109,7 +110,7 @@ export function useTradeCharts() {
           axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(127,127,127,0.06)' } },
           formatter: (ps: TooltipParam[]) =>
             `<div style="font-size:12px"><div style="opacity:.7">${ps[0]?.axisValueLabel}</div>${ps
-              .map((p) => row(p, formatMoney(Math.round(p.value * 100))))
+              .map((p) => row(p, formatMoney(p.seriesIndex === 0 ? points.value[p.dataIndex]?.successAmount : points.value[p.dataIndex]?.refundAmount)))
               .join('')}</div>`,
         },
         xAxis: { ...base.value.xAxis, type: 'category', data: points.value.map((p) => p.label) },
@@ -125,14 +126,14 @@ export function useTradeCharts() {
             barMaxWidth: 14,
             barGap: '30%',
             itemStyle: { color: c.chart1, borderRadius: [3, 3, 0, 0] },
-            data: points.value.map((p) => fenToYuan(p.successAmount)),
+            data: points.value.map((p) => amountToChartNumber(p.successAmount)),
           },
           {
             name: '退款金额',
             type: 'bar',
             barMaxWidth: 14,
             itemStyle: { color: c.chart4, borderRadius: [3, 3, 0, 0] },
-            data: points.value.map((p) => fenToYuan(p.refundAmount)),
+            data: points.value.map((p) => amountToChartNumber(p.refundAmount)),
           },
         ],
       }
@@ -148,8 +149,8 @@ export function useTradeCharts() {
         tooltip: {
           ...base.value.tooltip,
           trigger: 'item',
-          formatter: (p: { marker: string; name: string; value: number; percent: number }) =>
-            `<div style="font-size:12px">${p.marker}${p.name}<div style="margin-top:4px;font-variant-numeric:tabular-nums"><b>${formatMoney(Math.round(p.value * 100))}</b> · ${p.percent.toFixed(1)}%</div></div>`,
+          formatter: (p: { marker: string; name: string; value: number; percent: number; dataIndex: number }) =>
+            `<div style="font-size:12px">${p.marker}${p.name}<div style="margin-top:4px;font-variant-numeric:tabular-nums"><b>${formatMoney(shares.value[p.dataIndex]?.amount)}</b> · ${p.percent.toFixed(1)}%</div></div>`,
         },
         series: [
           {
@@ -162,8 +163,8 @@ export function useTradeCharts() {
             label: { show: false },
             emphasis: { scale: true, scaleSize: 4 },
             data: shares.value.map((s) => ({
-              name: CHANNEL[s.channel].label,
-              value: fenToYuan(s.amount),
+              name: channelMeta(s.channel).label,
+              value: amountToChartNumber(s.amount),
               itemStyle: { color: palette[s.channel] },
             })),
           },

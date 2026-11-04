@@ -16,7 +16,7 @@ import ErrorState from '@/components/ui/ErrorState.vue'
 import { useAsync } from '@/composables/useAsync'
 import { useAppPicker } from '@/composables/useAppPicker'
 import { api } from '@/services/api'
-import { WEBHOOK_EVENT } from '@/utils/dictionaries'
+import { webhookEventLabel } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 import type { WebhookEventType } from '@/types'
 
@@ -42,8 +42,8 @@ watch(
 )
 
 const groups: { title: string; events: WebhookEventType[] }[] = [
-  { title: '支付事件', events: ['payment.succeeded', 'payment.failed', 'payment.closed'] },
-  { title: '退款事件', events: ['refund.succeeded', 'refund.failed', 'refund.closed'] },
+  { title: '支付事件', events: ['PAYMENT.SUCCEEDED', 'PAYMENT.FAILED', 'PAYMENT.CLOSED'] },
+  { title: '退款事件', events: ['REFUND.SUCCEEDED', 'REFUND.FAILED', 'REFUND.CLOSED'] },
 ]
 
 function toggleEvent(e: WebhookEventType, v: boolean) {
@@ -160,7 +160,7 @@ function reset() {
               >
                 <Checkbox :id="`ev-${e}`" :model-value="form.events.includes(e)" @update:model-value="(v: boolean) => toggleEvent(e, v)" />
                 <span class="flex flex-col">
-                  <span class="text-[13px] font-medium">{{ WEBHOOK_EVENT[e] }}</span>
+                  <span class="text-[13px] font-medium">{{ webhookEventLabel(e) }}</span>
                   <span class="font-mono text-xs text-muted-foreground">{{ e }}</span>
                 </span>
               </label>

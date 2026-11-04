@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import StatusBadge from '@/components/ui/StatusBadge.vue'
-import { WEBHOOK_STATUS } from '@/utils/dictionaries'
+import { webhookStatusMeta } from '@/utils/dictionaries'
 import type { WebhookDeliveryStatus } from '@/types'
 
-defineProps<{ status: WebhookDeliveryStatus }>()
+const props = defineProps<{ status: WebhookDeliveryStatus }>()
+const meta = computed(() => webhookStatusMeta(props.status))
 </script>
 
 <template>
-  <StatusBadge :tone="WEBHOOK_STATUS[status].tone">{{ WEBHOOK_STATUS[status].label }}</StatusBadge>
+  <StatusBadge :tone="meta.tone" :title="meta.description">{{ meta.label }}</StatusBadge>
 </template>

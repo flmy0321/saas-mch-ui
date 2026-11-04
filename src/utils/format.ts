@@ -1,37 +1,4 @@
-import type { AmountFen } from '@/types'
-
-const yuanFormatter = new Intl.NumberFormat('zh-CN', {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})
-
-const compactFormatter = new Intl.NumberFormat('zh-CN', {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-})
-
-/** 分 → 元（数值） */
-export function fenToYuan(fen: AmountFen): number {
-  return Math.round(fen) / 100
-}
-
-/** 元（字符串/数值）→ 分，避免浮点误差 */
-export function yuanToFen(yuan: string | number): AmountFen {
-  const s = String(yuan).trim()
-  if (!/^\d+(\.\d{1,2})?$/.test(s)) return NaN
-  const [int, dec = ''] = s.split('.')
-  return Number(int) * 100 + Number(dec.padEnd(2, '0'))
-}
-
-export function formatMoney(fen: AmountFen | null | undefined, opts: { symbol?: boolean } = {}): string {
-  if (fen === null || fen === undefined || Number.isNaN(fen)) return '—'
-  const s = yuanFormatter.format(fenToYuan(fen))
-  return opts.symbol === false ? s : `¥${s}`
-}
-
-export function formatCompactMoney(fen: AmountFen): string {
-  return `¥${compactFormatter.format(fenToYuan(fen))}`
-}
+export { formatMoney, formatCompactMoney } from './money'
 
 export function formatNumber(n: number): string {
   return new Intl.NumberFormat('zh-CN').format(n)
@@ -77,8 +44,8 @@ export function maskMiddle(value: string, keepStart = 4, keepEnd = 4): string {
   return `${value.slice(0, keepStart)}${'•'.repeat(6)}${value.slice(-keepEnd)}`
 }
 
-export function formatDelta(ratio: number): string {
-  if (!Number.isFinite(ratio)) return '—'
+export function formatDelta(ratio: number | null | undefined): string {
+  if (ratio === null || ratio === undefined || !Number.isFinite(ratio)) return '—'
   const sign = ratio > 0 ? '+' : ''
   return `${sign}${(ratio * 100).toFixed(1)}%`
 }
