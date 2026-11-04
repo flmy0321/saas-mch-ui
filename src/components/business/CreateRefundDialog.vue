@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { AlertTriangle, CircleHelp, RefreshCw } from '@lucide/vue'
 import Dialog from '@/components/ui/Dialog.vue'
@@ -14,11 +14,12 @@ import { classifyFailure, classifySuccess, isValidRefund, refundMatches, type Re
 import {
   BLOCKING_PHASES,
   RecoveryUnavailableError,
-  beginResend,
   beginSend,
   discardRecovery,
+  listRecovery,
   openDraft,
   patchRecovery,
+  subscribeRecovery,
   type RecoveryContext,
   type RecoveryScope,
 } from '@/services/refund/recovery'
@@ -49,7 +50,7 @@ const scope = computed<RecoveryScope | null>(() =>
   session.user && session.merchant ? { tenant: session.merchant.merchantNo, userId: session.user.id } : null,
 )
 
-/** 上次提交结果未确认/未受理：锁定原编号、原金额，仅允许查询或原样重发 */
+/** 上次提交结果未确认/未受理：锁定原编号与原参数，仅允许查询（协议 v1.4 R1b，不开放重发） */
 const pending = computed(() => !!ctx.value && BLOCKING_PHASES.includes(ctx.value.phase))
 
 const describeError = (e: unknown) => (e instanceof Error ? e.message : '未知错误')
@@ -60,16 +61,13 @@ async function load() {
   lastError.value = null
   try {
     if (!scope.value) throw new Error('会话信息未就绪，请刷新页面后重试')
-    const [refundable, draft] = await Promise.all([
-      api.payments.refundable(props.payment.id),
-      openDraft(scope.value, props.payment.id),
-    ])
-    info.value = refundable
+    // 先读恢复上下文：待确认记录不依赖当前可退额度/资格，额度被占满时仍要能打开查询
+    const draft = await openDraft(scope.value, props.payment.id)
     ctx.value = draft
-    if (draft.phase === 'DRAFT') {
-      form.amount = draft.amount
-      form.reason = draft.reason
-    }
+    if (BLOCKING_PHASES.includes(draft.phase)) return
+    info.value = await api.payments.refundable(props.payment.id)
+    form.amount = draft.amount
+    form.reason = draft.reason
   } catch (e) {
     loadError.value =
       e instanceof RecoveryUnavailableError ? `${e.message}，为避免重复退款，当前无法发起退款` : describeError(e)
@@ -78,8 +76,43 @@ async function load() {
   }
 }
 
+/** 跨页签：其他页签推进/清除记录时按作用域重新读取 */
+function syncFromStore() {
+  const s = scope.value
+  const c = ctx.value
+  if (!open.value || !s || !c || submitting.value) return
+  let latest: RecoveryContext | undefined
+  try {
+    latest = listRecovery(s).find((x) => x.merchantRefundNo === c.merchantRefundNo)
+  } catch (e) {
+    lastError.value = describeError(e)
+    return
+  }
+  if (!latest) {
+    load()
+    return
+  }
+  if (latest.updatedAt !== c.updatedAt) {
+    ctx.value = latest
+    if (BLOCKING_PHASES.includes(latest.phase)) confirming.value = false
+    if (latest.phase === 'LOCATED') open.value = false
+  }
+}
+let unsubscribe: (() => void) | null = null
+watch(
+  open,
+  (v) => {
+    unsubscribe?.()
+    unsubscribe = v ? subscribeRecovery(syncFromStore) : null
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => unsubscribe?.())
+
 watch(open, (v) => {
   if (!v) return
+  info.value = null
+  ctx.value = null
   Object.assign(form, { amount: '', reason: '' })
   Object.assign(touched, { amount: false, reason: false })
   confirming.value = false
@@ -136,7 +169,15 @@ async function applyResult(result: RefundWriteResult, current: RecoveryContext) 
       return
     }
     case 'REJECTED': {
-      if (current.attempts <= 1) {
+      if (result.error.code === 'IDEMPOTENCY_CONFLICT') {
+        // 同号不同参：该编号可能已对应其他已受理退款，本地首次请求也不能证明历史未执行。保留原号与原参数，不清除、不换号
+        ctx.value = await patchRecovery(s, no, {
+          phase: 'SENT_PENDING',
+          note: '服务端返回幂等冲突：该退款编号可能已对应其他退款申请。已保留原编号与原参数，请查询核实或联系客服',
+        })
+        return
+      }
+      if (current.attempts <= 1 && current.phase === 'SENT_PENDING') {
         // 首次即被确定性拒绝：该编号从未生效，可清理并生成新草稿
         await patchRecovery(s, no, { phase: 'REJECTED_DRAFT', note: result.error.message })
         await discardRecovery(s, no)
@@ -144,7 +185,7 @@ async function applyResult(result: RefundWriteResult, current: RecoveryContext) 
         lastError.value = result.error.message
         confirming.value = false
       } else {
-        // 之前的尝试结果未确认，拒绝可能针对重复请求：保留记录继续查询
+        // 记录此前已处于未知状态：拒绝不能覆盖之前的未知结果，保留记录继续查询
         ctx.value = await patchRecovery(s, no, { phase: 'SENT_PENDING', note: `服务端拒绝：${result.error.message}` })
       }
       return
@@ -161,16 +202,17 @@ async function applyResult(result: RefundWriteResult, current: RecoveryContext) 
   }
 }
 
-async function send(resend: boolean) {
+async function send() {
   const s = scope.value
   if (!s || !ctx.value) return
   submitting.value = true
   lastError.value = null
   let current: RecoveryContext
   try {
-    current = resend
-      ? await beginResend(s, ctx.value.merchantRefundNo)
-      : await beginSend(s, ctx.value.merchantRefundNo, { amount: normalizeAmount(form.amount) ?? form.amount, reason: form.reason.trim() })
+    current = await beginSend(s, ctx.value.merchantRefundNo, {
+      amount: normalizeAmount(form.amount) ?? form.amount,
+      reason: form.reason.trim(),
+    })
     ctx.value = current
   } catch (e) {
     // 发送前持久化失败：不得发送请求
@@ -214,7 +256,9 @@ async function queryResult(silent = false) {
     ctx.value = await patchRecovery(s, c.merchantRefundNo, { lastCheckedAt: now, note: '查询到的记录与本次申请不一致，请联系客服核实' })
   } catch (e) {
     const notFound = e instanceof ApiError && e.code === 'NOT_FOUND'
-    const note = notFound ? '暂未查到该退款，可稍后再查，或使用相同编号重新提交' : `查询失败：${describeError(e)}`
+    const note = notFound
+      ? '暂未查到该退款。查不到不代表未受理，请稍后再查；长时间未查到请联系客服并提供商户退款编号'
+      : `查询失败：${describeError(e)}`
     try {
       ctx.value = await patchRecovery(s, c.merchantRefundNo, { lastCheckedAt: now, note })
     } catch (pe) {
@@ -248,10 +292,12 @@ const title = computed(() => (pending.value ? '退款结果待确认' : confirmi
         <CircleHelp class="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
         <div class="flex flex-col gap-1">
           <p class="font-medium text-foreground">
-            {{ ctx.phase === 'NOT_ACCEPTED' ? '上次提交未被受理，可使用相同信息重新提交' : '上次提交的结果尚未确认，请先查询结果' }}
+            {{ ctx.phase === 'NOT_ACCEPTED' ? '上次提交未被受理，结果待确认' : '上次提交的结果尚未确认' }}
           </p>
           <p v-if="ctx.note" class="text-muted-foreground">{{ ctx.note }}</p>
-          <p class="text-muted-foreground">为避免重复退款，重新提交将沿用原编号与原金额。</p>
+          <p class="text-muted-foreground">
+            为避免重复退款，结果确认前不能重新提交或对该订单发起新的退款。请查询结果，或联系客服并提供下方商户退款编号。
+          </p>
         </div>
       </div>
       <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-lg border border-border p-4 text-[13px]">
@@ -333,10 +379,9 @@ const title = computed(() => (pending.value ? '退款结果待确认' : confirmi
     <template #footer>
       <template v-if="pending">
         <Button :disabled="busy" @click="open = false">稍后处理</Button>
-        <Button :loading="querying" :disabled="submitting" @click="queryResult()">
+        <Button variant="primary" :loading="querying" :disabled="submitting" @click="queryResult()">
           <RefreshCw class="size-4" aria-hidden="true" />查询结果
         </Button>
-        <Button variant="danger" :loading="submitting" :disabled="querying" @click="send(true)">按原信息重新提交</Button>
       </template>
       <template v-else-if="!confirming">
         <Button @click="open = false">取消</Button>
@@ -344,7 +389,7 @@ const title = computed(() => (pending.value ? '退款结果待确认' : confirmi
       </template>
       <template v-else>
         <Button :disabled="submitting" @click="confirming = false">返回修改</Button>
-        <Button variant="danger" :loading="submitting" @click="send(false)">确认退款</Button>
+        <Button variant="danger" :loading="submitting" @click="send()">确认退款</Button>
       </template>
     </template>
   </Dialog>

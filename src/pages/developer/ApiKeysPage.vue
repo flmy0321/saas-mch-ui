@@ -128,7 +128,7 @@ const columns: ColumnDef<ApiKey>[] = [
     >
       <AlertTriangle class="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
       <p>
-        当前为<strong class="font-semibold">生产环境</strong>应用。轮换密钥后，旧密钥将保留 24 小时过渡期后自动失效，请在过渡期内完成服务端配置更新。
+        当前为<strong class="font-semibold">生产环境</strong>应用。轮换密钥后旧密钥会在过渡期结束后失效，请在过渡期内完成服务端配置更新。过渡期时长以正式密钥策略为准，当前 Mock 演示为 24 小时。
       </p>
     </div>
 
@@ -185,7 +185,7 @@ const columns: ColumnDef<ApiKey>[] = [
       :title="confirm?.kind === 'rotate' ? '轮换密钥？' : '撤销密钥？'"
       :description="
         confirm?.kind === 'rotate'
-          ? '将生成新密钥，旧密钥进入 24 小时过渡期后失效。'
+          ? '将生成新密钥，旧密钥进入过渡期后失效（过渡期以正式密钥策略为准，Mock 演示为 24 小时）。'
           : '撤销后使用该密钥的请求将立即被拒绝，此操作不可恢复。'
       "
       :confirm-text="confirm?.kind === 'rotate' ? '确认轮换' : '确认撤销'"

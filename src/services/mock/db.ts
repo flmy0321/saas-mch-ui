@@ -92,10 +92,14 @@ const HOUR = 60 * MIN
 const DAY = 24 * HOUR
 const PAY_EXPIRE = 30 * MIN
 
+/** 协议规定统计日界为 Asia/Shanghai（UTC+8，无夏令时），不随浏览器本地时区变化 */
+export const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000
+/** 把时间戳平移到上海墙钟，便于用 UTC getter 读取上海日期/星期 */
+export const toShanghaiWall = (ms: number) => new Date(ms + SHANGHAI_OFFSET_MS)
+
 export function startOfDay(ms: number) {
-  const d = new Date(ms)
-  d.setHours(0, 0, 0, 0)
-  return d.getTime()
+  const day = 24 * 60 * 60 * 1000
+  return Math.floor((ms + SHANGHAI_OFFSET_MS) / day) * day - SHANGHAI_OFFSET_MS
 }
 
 /* ------------------------------------------------------------------ */
@@ -322,7 +326,7 @@ function createPayment(createdMs: number): PaymentRow {
 const DAYS = 75
 for (let offset = DAYS - 1; offset >= 0; offset--) {
   const dayStart = startOfDay(NOW - offset * DAY)
-  const weekday = new Date(dayStart).getDay()
+  const weekday = toShanghaiWall(dayStart).getUTCDay()
   const base = weekday === 0 || weekday === 6 ? 150 : 118
   const trend = 1 + (DAYS - offset) * 0.003
   const count = Math.round(base * trend * (0.82 + rand() * 0.36))

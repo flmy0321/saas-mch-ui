@@ -180,20 +180,13 @@ export function beginSend(scope: RecoveryScope, merchantRefundNo: string, params
 }
 
 /**
- * 结果未确认或未受理后的重发：必须沿用原编号、原金额、原原因（R3/R4），
- * 在锁内把阶段推进回 SENT_PENDING 并累加次数。
+ * 协议 v1.4 R1b：内部恢复契约确定前，SENT_PENDING / NOT_ACCEPTED 记录不提供任何重发能力，
+ * 只允许查询、等待或联系客服。此处有意不导出 resend。
  */
-export function beginResend(scope: RecoveryScope, merchantRefundNo: string) {
-  return withLock((items) => {
-    const i = items.findIndex((c) => inScope(c, scope) && c.merchantRefundNo === merchantRefundNo)
-    const ctx = items[i]
-    if (!ctx) throw new RecoveryUnavailableError('本地退款记录已不存在，请重新打开退款窗口')
-    if (!BLOCKING_PHASES.includes(ctx.phase)) throw new RecoveryUnavailableError('该退款状态已变化，请刷新后查看')
-    const next: RecoveryContext = { ...ctx, phase: 'SENT_PENDING', attempts: ctx.attempts + 1, updatedAt: new Date().toISOString() }
-    const copy = [...items]
-    copy[i] = next
-    return { items: copy, result: next }
-  })
+
+/** 当前用户/租户下，某订单仍阻止新退款的记录（页面入口用，不加锁只读） */
+export function listBlockingFor(scope: RecoveryScope, paymentId: string): RecoveryContext[] {
+  return listRecovery(scope).filter((c) => c.paymentId === paymentId && BLOCKING_PHASES.includes(c.phase))
 }
 
 /** 更新上下文（结果确认、查询结果、失败说明等） */

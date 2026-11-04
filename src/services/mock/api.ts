@@ -40,19 +40,20 @@ import {
   sessions,
   startOfDay,
   stores,
+  toShanghaiWall,
   webhookConfigs,
   webhookDeliveries,
   type PaymentRow,
   type RefundRow,
 } from './db'
 
-const dayStartMs = (s: string) => new Date(`${s}T00:00:00`).getTime()
-const dayEndMs = (s: string) => new Date(`${s}T23:59:59.999`).getTime()
+const dayStartMs = (s: string) => new Date(`${s}T00:00:00+08:00`).getTime()
+const dayEndMs = (s: string) => new Date(`${s}T23:59:59.999+08:00`).getTime()
 const ms = (s: string | null) => (s ? new Date(s).getTime() : 0)
 const asOf = () => new Date().toISOString()
 const ymd = (t: number) => {
-  const d = new Date(t)
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  const d = toShanghaiWall(t)
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
 }
 const amt = (v: bigint | null) => (v === null ? null : fenToAmount(v))
 
@@ -109,8 +110,8 @@ function sortRows<T>(rows: T[], key: string | undefined, order: 'asc' | 'desc' |
 
 function filterPayments(q: PaymentQuery): PaymentRow[] {
   return payments.filter((p) => {
-    if (q.paymentId && !p.id.includes(q.paymentId.trim())) return false
-    if (q.merchantOrderNo && !(p.merchantOrderNo ?? '').includes(q.merchantOrderNo.trim())) return false
+    if (q.paymentId && p.id !== q.paymentId.trim()) return false
+    if (q.merchantOrderNo && p.merchantOrderNo !== q.merchantOrderNo.trim()) return false
     if (q.storeId && p.storeId !== q.storeId) return false
     if (q.channel && p.channel !== q.channel) return false
     if (q.method && p.method !== q.method) return false
@@ -130,9 +131,9 @@ function filterPayments(q: PaymentQuery): PaymentRow[] {
 
 function filterRefunds(q: RefundQuery): RefundRow[] {
   return refunds.filter((r) => {
-    if (q.refundId && !r.id.includes(q.refundId.trim())) return false
-    if (q.merchantRefundNo && !r.merchantRefundNo.includes(q.merchantRefundNo.trim())) return false
-    if (q.paymentId && !r.paymentId.includes(q.paymentId.trim())) return false
+    if (q.refundId && r.id !== q.refundId.trim()) return false
+    if (q.merchantRefundNo && r.merchantRefundNo !== q.merchantRefundNo.trim()) return false
+    if (q.paymentId && r.paymentId !== q.paymentId.trim()) return false
     if (q.storeId && r.storeId !== q.storeId) return false
     if (q.status && r.status !== q.status) return false
     const c = ms(r.createdAt)
@@ -236,14 +237,16 @@ function dailyTrend(days: number, f: StatFilter = {}): TrendPoint[] {
 
 function bucketStarts(from: number, to: number, g: Granularity): number[] {
   const starts: number[] = []
-  const d = new Date(startOfDay(from))
-  if (g === 'week') d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
-  if (g === 'month') d.setDate(1)
-  while (d.getTime() <= to) {
-    starts.push(d.getTime())
-    if (g === 'day') d.setDate(d.getDate() + 1)
-    else if (g === 'week') d.setDate(d.getDate() + 7)
-    else d.setMonth(d.getMonth() + 1)
+  // 在上海墙钟（UTC getter）上推进日/周/月，再换回真实时间戳
+  const d = toShanghaiWall(startOfDay(from))
+  if (g === 'week') d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7))
+  if (g === 'month') d.setUTCDate(1)
+  const real = () => d.getTime() - 8 * 60 * 60 * 1000
+  while (real() <= to) {
+    starts.push(real())
+    if (g === 'day') d.setUTCDate(d.getUTCDate() + 1)
+    else if (g === 'week') d.setUTCDate(d.getUTCDate() + 7)
+    else d.setUTCMonth(d.getUTCMonth() + 1)
   }
   return starts
 }
@@ -430,7 +433,8 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
             successCount: ratio(cur.successCount, prev.successCount),
             refundAmount: ratio(cur.refundAmount, prev.refundAmount),
             refundCount: ratio(cur.refundCount, prev.refundCount),
-            successRate: prevRate === null || !cur.terminalCount ? null : rate(cur) - prevRate,
+            // 协议：相对变化 (cur - prev) / prev；任一分母为 0 返回 null
+            successRate: prevRate === null || prevRate === 0 || !cur.terminalCount ? null : (rate(cur) - prevRate) / prevRate,
           },
         }
       }),

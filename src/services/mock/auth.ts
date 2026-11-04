@@ -54,7 +54,7 @@ function issueTokens(): AuthTokens {
 /** 模拟服务端校验 Authorization: Bearer <accessToken> */
 export function assertAuthenticated() {
   if (!isValid(tokenStorage.get()?.accessToken, 'at')) {
-    throw new ApiError('登录已过期，请重新登录', 'UNAUTHENTICATED')
+    throw new ApiError('登录已过期，请重新登录', 'UNAUTHENTICATED', { httpStatus: 401 })
   }
 }
 
@@ -90,17 +90,17 @@ export const mockAuth: MerchantApi['auth'] = {
   login: (input) =>
     delay(() => {
       const account = input.account.trim().toLowerCase()
-      if (!account || !input.password) throw new ApiError('请输入账号和密码', 'VALIDATION')
+      if (!account || !input.password) throw new ApiError('请输入账号和密码', 'VALIDATION', { httpStatus: 400 })
 
       const captcha = captchas.get(input.captchaId)
       captchas.delete(input.captchaId)
-      if (!captcha || captcha.expiresAt < Date.now()) throw new ApiError('验证码已过期，请刷新后重试', 'CAPTCHA_INVALID')
-      if (captcha.code !== input.captchaCode.trim().toUpperCase()) throw new ApiError('验证码错误', 'CAPTCHA_INVALID')
+      if (!captcha || captcha.expiresAt < Date.now()) throw new ApiError('验证码已过期，请刷新后重试', 'CAPTCHA_INVALID', { httpStatus: 400 })
+      if (captcha.code !== input.captchaCode.trim().toUpperCase()) throw new ApiError('验证码错误', 'CAPTCHA_INVALID', { httpStatus: 400 })
 
       const state = failures.get(account) ?? { count: 0, lockedUntil: 0 }
       if (state.lockedUntil > Date.now()) {
         const minutes = Math.ceil((state.lockedUntil - Date.now()) / 60000)
-        throw new ApiError(`密码错误次数过多，账号已锁定，请 ${minutes} 分钟后再试`, 'ACCOUNT_LOCKED')
+        throw new ApiError(`密码错误次数过多，账号已锁定，请 ${minutes} 分钟后再试`, 'ACCOUNT_LOCKED', { httpStatus: 423 })
       }
 
       const matched = account === MOCK_ACCOUNT.email.toLowerCase() || account === MOCK_ACCOUNT.phone
@@ -108,10 +108,10 @@ export const mockAuth: MerchantApi['auth'] = {
         state.count += 1
         if (state.count >= MAX_FAILURES) {
           failures.set(account, { count: 0, lockedUntil: Date.now() + LOCK_MS })
-          throw new ApiError('密码错误次数过多，账号已锁定，请 15 分钟后再试', 'ACCOUNT_LOCKED')
+          throw new ApiError('密码错误次数过多，账号已锁定，请 15 分钟后再试', 'ACCOUNT_LOCKED', { httpStatus: 423 })
         }
         failures.set(account, state)
-        throw new ApiError(`账号或密码错误，还可尝试 ${MAX_FAILURES - state.count} 次`, 'INVALID_CREDENTIALS')
+        throw new ApiError(`账号或密码错误，还可尝试 ${MAX_FAILURES - state.count} 次`, 'INVALID_CREDENTIALS', { httpStatus: 400 })
       }
 
       failures.delete(account)
@@ -121,7 +121,7 @@ export const mockAuth: MerchantApi['auth'] = {
 
   refresh: (refreshToken) =>
     delay(() => {
-      if (!isValid(refreshToken, 'rt')) throw new ApiError('登录已过期，请重新登录', 'UNAUTHENTICATED')
+      if (!isValid(refreshToken, 'rt')) throw new ApiError('登录已过期，请重新登录', 'UNAUTHENTICATED', { httpStatus: 401 })
       revoke(refreshToken)
       return issueTokens()
     }, 200),

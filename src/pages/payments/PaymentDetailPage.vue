@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, FileSearch, Undo2 } from '@lucide/vue'
+import { ArrowLeft, CircleHelp, FileSearch, Undo2 } from '@lucide/vue'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
@@ -26,6 +26,8 @@ import { api } from '@/services/api'
 import { methodLabel, paymentSourceLabel } from '@/utils/dictionaries'
 import { formatDateTime, formatMoney } from '@/utils/format'
 import { isPositiveAmount } from '@/utils/money'
+import { listBlockingFor, subscribeRecovery, type RecoveryContext } from '@/services/refund/recovery'
+import { useSessionStore } from '@/stores/session'
 import type { Refund } from '@/types'
 
 const route = useRoute()
@@ -42,14 +44,41 @@ const refundOpen = ref(false)
 
 const notFound = computed(() => detail.error.value?.includes('不存在'))
 
+/** 当前用户/租户在该订单上的待确认退款记录：独立入口，不受新建退款资格与可退额度影响 */
+const session = useSessionStore()
+const pendingRecovery = ref<RecoveryContext[]>([])
+const recoveryError = ref<string | null>(null)
+function readRecovery() {
+  const s = session.user && session.merchant ? { tenant: session.merchant.merchantNo, userId: session.user.id } : null
+  if (!s) {
+    pendingRecovery.value = []
+    return
+  }
+  try {
+    pendingRecovery.value = listBlockingFor(s, id.value)
+    recoveryError.value = null
+  } catch (e) {
+    pendingRecovery.value = []
+    recoveryError.value = e instanceof Error ? e.message : '本地退款记录不可用'
+  }
+}
+watch([id, () => session.user?.id, () => session.merchant?.merchantNo], readRecovery, { immediate: true })
+const unsubscribeRecovery = subscribeRecovery(readRecovery)
+onBeforeUnmount(() => unsubscribeRecovery())
+const hasPendingRefund = computed(() => pendingRecovery.value.length > 0)
+
 const canRefund = computed(
   () =>
+    !hasPendingRefund.value &&
+    !recoveryError.value &&
     p.value?.status === 'SUCCESS' &&
     info.data.value?.refundEligibility === 'ALLOWED' &&
     isPositiveAmount(info.data.value.refundableAmount),
 )
 const refundDisabledReason = computed(() => {
   if (!p.value) return ''
+  if (hasPendingRefund.value) return '该订单有待确认的退款申请，请先确认结果'
+  if (recoveryError.value) return `${recoveryError.value}，为避免重复退款暂不可发起`
   if (p.value.status !== 'SUCCESS') return '仅支付成功的订单可以发起退款'
   const i = info.data.value
   if (!i) return '正在查询可退金额'
@@ -73,7 +102,8 @@ const steps = computed<TimelineStep[]>(() => {
   else if (x.status === 'CLOSED') s.push({ title: '订单关闭', at: x.closedAt, state: 'neutral', note: '超时未支付或商户主动关闭' })
   else if (x.status === 'CLOSING') s.push({ title: '关单处理中', state: 'current' })
   else if (x.status === 'PAYING') s.push({ title: '等待支付结果', state: 'current', note: x.expireAt ? `订单将于 ${formatDateTime(x.expireAt)} 过期` : undefined })
-  else s.push({ title: '等待用户支付', state: 'pending', note: x.expireAt ? `订单将于 ${formatDateTime(x.expireAt)} 过期` : undefined })
+  else if (x.status === 'CREATED') s.push({ title: '等待用户支付', state: 'pending', note: x.expireAt ? `订单将于 ${formatDateTime(x.expireAt)} 过期` : undefined })
+  else s.push({ title: '状态未识别', state: 'neutral', note: `当前版本未识别的订单状态 ${x.status}，请以订单查询结果为准` })
   for (const r of [...(refunds.data.value?.items ?? [])].reverse()) {
     s.push({
       title: `退款 ${formatMoney(r.amount)}`,
@@ -105,6 +135,7 @@ const baseItems = computed(() => {
 const refundColumns = buildRefundColumns({ withPayment: false })
 
 function onRefundCreated(r: Refund) {
+  readRecovery()
   detail.reload()
   refunds.reload()
   info.reload()
@@ -141,6 +172,9 @@ function onRefundCreated(r: Refund) {
           <Skeleton v-else class="h-4 w-56" />
         </template>
         <template #actions>
+          <Button v-if="hasPendingRefund" variant="secondary" class="border-warning/50 text-warning" @click="refundOpen = true">
+            <CircleHelp aria-hidden="true" />待确认退款（{{ pendingRecovery.length }}）
+          </Button>
           <Tooltip :content="refundDisabledReason" :disabled="canRefund || !p">
             <span tabindex="-1">
               <Button variant="primary" :disabled="!canRefund" @click="refundOpen = true">

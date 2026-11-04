@@ -27,10 +27,19 @@ export type RefundWriteResult =
 
 const isStr = (v: unknown): v is string => typeof v === 'string'
 const isNullableStr = (v: unknown) => v === null || isStr(v)
+const hasOwn = (o: Record<string, unknown>, k: string) => Object.prototype.hasOwnProperty.call(o, k)
+/** nullable 字段必须存在（值可为 null），缺失字段视为结构损坏 */
+const isPresentNullableStr = (o: Record<string, unknown>, k: string) => hasOwn(o, k) && isNullableStr(o[k])
 
-/** 结构校验：标识/金额/结构损坏视为不合法；未知 status 字符串仍合法 */
+function isValidProgressEvent(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const e = value as Record<string, unknown>
+  return isStr(e.status) && e.status.length > 0 && isStr(e.at) && e.at.length > 0 && (e.note === undefined || isStr(e.note))
+}
+
+/** 结构校验：标识/金额/字段缺失/数组元素损坏均视为不合法；未知 status 字符串仍合法 */
 export function isValidRefund(value: unknown): value is Refund {
-  if (!value || typeof value !== 'object') return false
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const r = value as Record<string, unknown>
   return (
     isStr(r.id) &&
@@ -43,11 +52,14 @@ export function isValidRefund(value: unknown): value is Refund {
     isStr(r.channel) &&
     isStr(r.createdAt) &&
     isStr(r.updatedAt) &&
-    isNullableStr(r.finishedAt) &&
-    isNullableStr(r.merchantOrderNo) &&
-    isNullableStr(r.storeId) &&
-    isNullableStr(r.storeName) &&
-    Array.isArray(r.progress)
+    isStr(r.reason) &&
+    isPresentNullableStr(r, 'failReason') &&
+    isPresentNullableStr(r, 'finishedAt') &&
+    isPresentNullableStr(r, 'merchantOrderNo') &&
+    isPresentNullableStr(r, 'storeId') &&
+    isPresentNullableStr(r, 'storeName') &&
+    Array.isArray(r.progress) &&
+    r.progress.every(isValidProgressEvent)
   )
 }
 
