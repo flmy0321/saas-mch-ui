@@ -172,7 +172,14 @@ function onRefundCreated(r: Refund) {
           <Skeleton v-else class="h-4 w-56" />
         </template>
         <template #actions>
-          <Button v-if="hasPendingRefund" variant="secondary" class="border-warning/50 text-warning" @click="refundOpen = true">
+          <Button
+            v-if="hasPendingRefund"
+            variant="secondary"
+            class="border-warning/50 text-warning"
+            :disabled="!p"
+            :title="p ? undefined : '订单详情加载中'"
+            @click="refundOpen = true"
+          >
             <CircleHelp aria-hidden="true" />待确认退款（{{ pendingRecovery.length }}）
           </Button>
           <Tooltip :content="refundDisabledReason" :disabled="canRefund || !p">

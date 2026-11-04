@@ -109,14 +109,24 @@ watch(
 )
 onBeforeUnmount(() => unsubscribe?.())
 
-watch(open, (v) => {
-  if (!v) return
-  info.value = null
-  ctx.value = null
-  Object.assign(form, { amount: '', reason: '' })
-  Object.assign(touched, { amount: false, reason: false })
-  confirming.value = false
-  load()
+// immediate：父组件可能在本组件挂载前已将 open 置为 true（详情未返回时提前点击入口）
+watch(
+  open,
+  (v) => {
+    if (!v) return
+    info.value = null
+    ctx.value = null
+    Object.assign(form, { amount: '', reason: '' })
+    Object.assign(touched, { amount: false, reason: false })
+    confirming.value = false
+    load()
+  },
+  { immediate: true },
+)
+
+// 会话作用域晚于弹窗打开就绪时补做一次加载，避免停留在"会话信息未就绪"
+watch(scope, (s, prev) => {
+  if (open.value && s && !prev && !ctx.value && !loading.value) load()
 })
 
 const eligibilityBlock = computed(() => {
