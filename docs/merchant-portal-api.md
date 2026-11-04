@@ -1,6 +1,6 @@
-# 商户后台（Merchant Portal）网页接口协议 v1.2（候选草案）
+# 商户后台（Merchant Portal）网页接口协议 v1.3（候选草案）
 
-> **文档状态：候选草案，尚未达到可联调协议状态，不可原样作为后端实现依据。** 已根据《UI 协议核查结果》（2026-11-03）与《v1.1 复核与修订意见》（2026-11-04）修订。标记为 **【待核对】** 的条目依赖尚未设计的**支付领域内部能力契约**或核心锁定 Schema / 通知契约，在契约补齐前不得自行定义实现。**本版只修订文档；前端类型、Mock 与页面仍为旧版实现，差异见第 8 节。**
+> **文档状态：候选草案，可作为前端改造方向；尚不是后端联调验收依据，也不是内部服务契约冻结。** 已根据《UI 协议核查结果》（2026-11-03）、《v1.1 复核与修订意见》（2026-11-04）与《v1.2 复核结果及最后补充清单》（2026-11-04）修订。标记为 **【待核对】** 的条目依赖尚未设计的**支付领域内部能力契约**或核心锁定 Schema / 通知契约，在契约补齐前不得自行定义实现。**本版只修订文档；前端类型、Mock 与页面仍为旧版实现（`MerchantApi.auth` 注释除外），差异见第 8 节。**
 
 本文档描述商户后台前端（Portal）所依赖的网页接口。它与 `src/services/api/types.ts`、`src/types/index.ts` 的对应关系**只用于保证 UI 草案内部一致**，不能凌驾于已锁定的跨系统规则；两者与核心规则冲突时，以核心规则为准，并同步修改本文档与前端代码。
 
@@ -35,7 +35,7 @@
 | --- | --- |
 | Base URL | `/api/portal/v1`（与前端同域，或通过网关反向代理） |
 | 协议 | HTTPS，`Content-Type: application/json; charset=utf-8` |
-| 鉴权 | Bearer Token：除 `/auth/*` 外所有接口须携带 `Authorization: Bearer <accessToken>`，详见 5.0。商户维度由 token 对应的用户确定，**任何请求参数都不得用于切换商户** |
+| 鉴权 | Bearer Token：仅 `GET /auth/captcha`、`POST /auth/login`、`POST /auth/refresh` 无需 access token；其余所有接口（**含 `POST /auth/logout`**）须携带 `Authorization: Bearer <accessToken>`，详见 5.0。商户维度由 token 对应的用户确定，**任何请求参数都不得用于切换商户** |
 | CSRF | 不使用 Cookie 鉴权，因此无需 CSRF Token；服务端不得从 Cookie 读取凭证 |
 | CORS | 如前后端不同域，仅放行商户后台域名，允许 `Authorization` 请求头，不要使用 `Access-Control-Allow-Origin: *` |
 | 字段命名 | JSON 字段使用 lowerCamelCase |
@@ -53,11 +53,12 @@
 
 | 项 | 约定 |
 | --- | --- |
-| 类型 | `AmountDecimal = string`，单位**元**，正则 `^-?\d+\.\d{2}$`，如 `"128.00"`、`"0.01"` |
-| 输出 | 一律两位小数；可空金额返回 `null`，不返回空字符串 |
-| 输入 | 退款金额等输入同样为元字符串，须大于 0、最多两位小数；格式不符返回 `VALIDATION`，不做四舍五入或截断 |
+| 类型 | `AmountDecimal = string`，单位**元**。输出与输入分别定义格式（见下两行） |
+| 输出格式 | 服务端输出**恰好两位小数**，非负：正则 `^(0|[1-9]\d*)\.\d{2}$`，如 `"128.00"`、`"0.01"`、`"0.00"`。可空金额返回 `null`，不返回空字符串 |
+| 输入格式 | 浏览器提交的金额允许 0~2 位小数：正则 `^(0|[1-9]\d*)(\.\d{1,2})?$`（如 `"50"`、`"50.5"`、`"50.50"`），服务端规范化为两位小数后参与比较；不允许正负号、千分位、科学计数法、首尾空格；不符返回 `VALIDATION`，**不做四舍五入或截断** |
+| 符号 | 支付金额、退款金额、可退金额、统计合计均**非负**；退款请求金额须**严格大于 0**。带符号金额（`-` 前缀）仅在确有业务含义的字段中使用，且须在字段处单独声明；本版无此类字段 |
 | 统计合计 | 同为十进制字符串，后端以十进制类型累加。精度与取值范围 **【待核对】**（按内部契约约定的 precision/scale），超出约定范围返回错误并告警，不得截断或返回近似值，**不称“无上限”** |
-| 前端运算 | 金额比较、加减、校验使用十进制库或基于字符串的整数分换算；**不得用 `Number` / `parseFloat` 做金额运算**。图表绘制可派生近似数值，但仅用于绘制，展示与提示仍用原字符串 |
+| 前端运算 | 金额比较、加减、校验使用十进制库或基于字符串的整数分换算；**不得用 `Number` / `parseFloat` 做金额运算，也不得用字符串字典序比较金额**（如 `"9.00" > "10.00"` 为真）。图表绘制可派生近似数值，但仅用于绘制，展示与提示仍用原字符串 |
 | 导出 | CSV 金额列为元字符串（见 5.2） |
 
 ### 1.2 响应格式
@@ -106,6 +107,10 @@
 | 500 | `INTERNAL` | 服务端异常 |
 
 涉及资金写操作的错误响应体额外包含 `outcome` 字段：`"REJECTED"`（确定未执行，如校验/资格/额度拒绝）、`"NOT_ACCEPTED"`（内部能力权威声明未受理）、`"UNKNOWN"`（结果未确定）。前端仅依据 `outcome` 判断结果是否确定，不依据 HTTP 状态码推断。
+
+对资金写操作，以下情况前端一律按 `outcome: "UNKNOWN"` 处理：网络异常/超时/连接中断；代理或网关返回非 JSON 响应体；响应体解析失败；`outcome` 缺失或为本文未列出的值；HTTP 2xx 但响应体不是合法 `Refund` 资源。**响应解析失败不得清除恢复记录**（见 5.3）。
+
+`outcome` 只描述**本次请求**的结果，不描述该业务号历史上其他请求的结果（见 5.3 R2）。
 
 **【待核对】** 内部能力错误 → 网页错误码的映射表待内部契约设计后补充；映射前不得把未知内部错误统一映射为 `VALIDATION`，也不得映射为 `UNAUTHENTICATED`。
 
@@ -193,7 +198,7 @@
 | `refundCount` | int | 退款笔数（全部状态） |
 | `refundPrincipalLimit` | AmountDecimal \| null | 核心返回的退款本金上限，未知为 null |
 | `availableRefundAmount` | AmountDecimal \| null | 核心返回的当前可退金额，**未知为 null，前端按“不可退”处理并提示原因** |
-| `refundEligibility` | RefundEligibility \| string | 退款资格，**字符串枚举**，沿用锁定 Payment Schema 语义（见下） |
+| `refundEligibility` | RefundEligibility \| string \| null | 退款资格，**字符串枚举**，沿用锁定 Payment Schema 语义（见下）。服务端无法取得权威资格时返回 `null`（字段不省略） |
 | `collectionVerification` | CollectionVerification \| string \| null | 收款核验状态，**字符串枚举**，沿用锁定 Schema 语义（见下）；不适用时为 null |
 
 `RefundEligibility`：`NOT_COLLECTED` 未确认收款 · `REVIEW_REQUIRED` 待人工复核 · `RULE_UNVERIFIED` 退款规则未核实 · `BLOCKED` 已阻断 · `EXHAUSTED` 额度已用尽 · `ALLOWED` 允许退款。
@@ -201,7 +206,14 @@
 `CollectionVerification`：`PENDING` 核验中 · `VERIFIED` 已核验 · `REVIEW_REQUIRED` 待复核。
 
 - 本版**直接沿用上述字符串语义**，不另建结构。若后续 Portal DTO 改为结构化对象，须在本文给出显式映射表，不得声称透传。
-- **开放退款提交的唯一条件**：`refundEligibility === "ALLOWED"` **且** `availableRefundAmount` 非 null 且大于 `"0.00"`。其余情况（含未知枚举值、null）一律不可提交，并提示“待核实/不可退”原因；提交后仍由核心再次校验。
+- **资金资格展示条件**（必要非充分）：`refundEligibility === "ALLOWED"` **且** `availableRefundAmount` 非 null、格式合法且大于 `"0.00"`。其余情况（含 `null`、字段缺失、坏值、未知枚举值）一律按不可退处理，并提示“待核实/不可退”原因。
+- **前端开放提交须同时满足**（全部为真才可点击提交）：
+  1. 满足上述资金资格展示条件（以打开弹窗时实时取得的 5.2 `RefundableInfo` 为准）；
+  2. 当前用户具有该订单的退款操作权限（权限来源见第 7 节，未定前按服务端 403 处理）；
+  3. 当前用户/租户/订单**不存在待确认（UNKNOWN）或可能已发送的本地退款操作**（见 5.3 R3）——**无论可退余额是否仍足够**，待确认期间禁止从此入口另建退款；
+  4. 不处于提交中；
+  5. 输入金额符合 1.1 输入格式、大于 0、且不超出当前提示的可退金额（十进制比较）。
+- 以上为防误操作的前端约束，**服务端必须独立授权并以核心原子校验为准**；前端校验通过不代表可退。
 - `refundedAmount` / `refundingAmount` 只用于展示，**不得用于判断能否退款**。
 
 ### 3.2 Refund 退款
@@ -316,6 +328,7 @@
 | `refunds.list(query)` | `GET /refunds` |
 | `refunds.get(id)` | `GET /refunds/{id}` |
 | `refunds.create(input)` | `POST /refunds` |
+| `refunds.findByMerchantRefundNo(paymentId, merchantRefundNo)` | `GET /refunds/by-merchant-refund-no/{merchantRefundNo}?paymentId=`（精确查询，见 5.3） |
 | `analytics.query(q)` | `GET /analytics` |
 | `stores.list(query)` | `GET /stores` |
 | `stores.all()` | `GET /stores/options` |
@@ -419,8 +432,6 @@
 
 #### 统计口径（工作台、交易统计、门店统计共用）
 
-| 指标 | 口径 |
-| --- | --- |
 两类指标使用**不同的订单集合**，不得交叉相除：
 
 | 指标 | 集合 | 口径 |
@@ -433,7 +444,7 @@
 | `successRate` | 集合 C | `createdSuccessCount / terminalCount`；`terminalCount = 0` 时为 `0` |
 
 - 不得以集合 P 的 `successCount` 除以集合 C 的 `terminalCount`。
-- 报表响应均返回 `asOf`（ISO 8601，数据截止时间），用于展示数据延迟。
+- 所有报表响应（`/dashboard/summary`、`/dashboard/trend`、`/dashboard/channel-share`、`/analytics`、`/stores/{id}/stats`）均为对象并在顶层返回 `asOf`（ISO 8601，数据截止时间），用于展示数据延迟；列表型报表统一为 `{ asOf, items }` 或明确命名的数组字段，**不直接返回裸数组**。`/dashboard/recent-payments` 为业务列表，不属于报表，不带 `asOf`。
 - 比较值（同比/环比）分母为零时返回 `null`，**不得产生 `Infinity` / `NaN`**；前端展示为“—”。
 - 金额合计为 `AmountDecimal`。
 
@@ -469,9 +480,9 @@
 
 `TrendPoint`：`date (YYYY-MM-DD)`, `successAmount: AmountDecimal`, `successCount`, `refundAmount: AmountDecimal`, `refundCount`, `totalCount`, `terminalCount`, `createdSuccessCount`, `successRate`。`date` 为唯一 key，前端显示格式自行派生。
 
-#### `GET /dashboard/channel-share?days=` → `ChannelShare[]`
+#### `GET /dashboard/channel-share?days=` → `{ asOf, items: ChannelShare[] }`
 
-`{ channel, amount, count }`，仅统计支付成功订单，按 `amount` 降序。
+`ChannelShare`：`{ channel, amount: AmountDecimal, count }`，基于集合 P（`paidAt` 落入区间的支付成功订单），按 `amount` 降序；`channel` 可为未知枚举值。
 
 #### `GET /dashboard/recent-payments?limit=10` → `Payment[]`
 
@@ -513,7 +524,8 @@
 
 - `refundableAmount` 来自内部能力返回的权威可退金额（对应核心 `availableRefundAmount` 语义，经显式映射），Portal 不自行用“订单金额 − 已退 − 处理中”计算；未知时为 null。
 - `refundEligibility` 为 3.1 定义的字符串枚举；`ineligibleReason` 为面向商户的中文说明，`ALLOWED` 时为 null。核心状态为 `PART_REFUNDED` 时仍可能可退，不得因网页状态非 `SUCCESS` 而拒绝。
-- 前端：仅当 `refundEligibility === "ALLOWED"` 且 `refundableAmount` 非 null 且大于 `"0.00"` 时开放提交；其他情况（含未知枚举）禁用并提示“待核实/不可退”，**未知值不得显示为可退**。打开弹窗时实时调用、不用缓存；该值仅为提示，**最终以提交时核心的再次校验为准**（并发下仍可能被拒）。
+- `refundEligibility` 与 `refundableAmount` 均可为 `null`（无法取得权威值），字段不省略；前端遇到 `null`、缺失、格式非法或未知枚举时一律保守禁用。
+- 前端：`refundEligibility === "ALLOWED"` 且 `refundableAmount` 非 null 且大于 `"0.00"` 只是**资金资格展示条件**，开放提交还须满足 3.1 列出的全部条件（权限、无待确认操作、非提交中、输入合法且不超额）。其他情况禁用并提示“待核实/不可退”，**未知值不得显示为可退**。打开弹窗时实时调用、不用缓存；该值仅为提示，**最终以提交时核心的原子校验为准**（并发下仍可能被拒）。
 - `paymentAmount` / `refundedAmount` / `refundingAmount` 仅用于展示。
 
 #### `GET /payments/export` → `{ filename, rows, content }`
@@ -547,7 +559,7 @@
 **Portal 后端职责（仅限以下）：**
 
 1. 认证；校验当前用户对该订单所属商户/门店有退款权限，否则 `403 FORBIDDEN`；订单不属于当前商户返回 `404 NOT_FOUND`
-2. 格式校验：`amount` 为大于 0 的 `AmountDecimal`（最多两位小数），`merchantRefundNo` 去除首尾空格后非空且符合约定格式，`reason` 去空格、为空时默认“商户发起退款”、最长 80 字；否则 `400 VALIDATION`（`outcome: "REJECTED"`）
+2. 格式校验：`amount` 符合 1.1 **输入格式**且严格大于 0，`merchantRefundNo` 去除首尾空格后非空且符合约定格式，`reason` 去空格、为空时默认“商户发起退款”、最长 80 字；否则 `400 VALIDATION`（`outcome: "REJECTED"`）
 3. 携带服务身份、租户、操作者、权限范围与审计上下文，调用**独立内部能力契约（待设计）**创建退款；将结果**规范化**为本文的 `Refund` 资源与错误码，保留真实业务状态、结果确定性（`outcome`）与关联号，不原样透传内部状态码
 
 **以下由 payment-core 完成，Portal 不得自行实现或在本地复制**：订单行加锁、退款额度预占与校验（含 `SUSPENDED` 占用、`PART_REFUNDED` 后续退款）、资格判定、Provider 调用与回调、退款状态推进、订单退款金额汇总。确定性拒绝映射为 `INVALID_STATUS` / `EXCEED_REFUNDABLE` / `REFUND_NOT_ELIGIBLE`（**【待核对】** 完整映射）。
@@ -558,32 +570,51 @@
 | --- | --- |
 | 新编号，已受理 | `201` / `202` + 当前退款资源 |
 | 同编号 + 同业务参数 | `200` + **已有退款资源**，不重复退款 |
-| 同编号 + 不同业务参数 | `409 IDEMPOTENCY_CONFLICT`（`outcome: "REJECTED"`） |
+| 同编号 + 不同业务参数 | `409 IDEMPOTENCY_CONFLICT`（`outcome: "REJECTED"`，**仅指本次冲突请求未产生新退款**，见 R2） |
 | 确定性业务拒绝 | `409` + 对应 code（`outcome: "REJECTED"`） |
 | 超时 / 结果未知 / 不可用但未权威声明未受理 | `502 / 503 / 504` + `outcome: "UNKNOWN"` |
 
-- 幂等作用域（商户级 / App 级）与参与比较的字段 **【待核对】**，以内部契约为准；至少包含 `paymentId`、`amount`。
-- 成功响应中的 `status` 可能是 `CREATED`、`PROCESSING` 或其他当前状态，前端不得假定为 `CREATED`。
+- 幂等作用域（商户级 / App 级）与参与比较的字段 **【待核对】**，以内部契约为准；至少包含 `paymentId`、`amount`。在决定前，前端类型与 Mock **不得默认 `merchantRefundNo` 在商户内全局唯一**（见 R4）。
+- 成功响应（`200/201/202`）只表示请求已受理或已定位到原退款资源，**不表示资金已退成功**；前端按资源 `status` 展示（可能是 `CREATED`、`PROCESSING`、`SUSPENDED`、`SUCCESS`、`FAILED` 或未知值），不得把 HTTP 成功当作退款成功，也不得假定为 `CREATED`。
 
-**结果未知的处理（查询不到 ≠ 未执行）：**
+**R1 提交条件**：见 3.1“前端开放提交须同时满足”。资金资格只是必要条件之一；任何待确认操作存在时，此入口禁止另建退款。服务端独立授权并以核心原子校验为准。
 
-1. 收到 `outcome: "UNKNOWN"`、网络错误或超时时，前端进入**待确认**状态：保留原 `merchantRefundNo` 与原请求参数，**不得自动重发、不得换号、不得允许修改参数后重发**。
-2. 待确认期间按原业务号调用 `GET /refunds/by-merchant-refund-no/{merchantRefundNo}`（见下）确认结果。**`404`、空结果、读模型延迟或一次超时都不能证明未受理**，只能继续展示“待确认”。
-3. 只有当权威内部恢复协议明确返回“确定未受理”（`outcome: "NOT_ACCEPTED"`）时，才允许用户以**同号同参**重新提交；该恢复不得导致向 Provider 再次发起未知结果的资金写。具体恢复协议 **【待核对】**。
-4. 未确认结果的退款同样视为可能占用额度，前端提示用户勿另行发起新退款。
+**R2 结果确定性的作用范围（`REJECTED` 不清除原号的未知状态）：**
 
-**恢复上下文（前端）：**
+1. `outcome` 只描述**本次请求**。某业务号一旦出现过 `UNKNOWN`（或可能已发送但无响应），该业务号即处于“待确认”，**后续任何请求的确定性拒绝都不得覆盖它**，除非权威恢复协议明确证实原操作**未受理**（`NOT_ACCEPTED`）或精确查询定位到原退款资源。
+2. 典型情形：同号不同参 `IDEMPOTENCY_CONFLICT` 只证明冲突请求未产生新退款，原编号可能已对应一笔已受理、处理中甚至成功的退款；认证失败（401）、权限变化（403）、参数校验失败（400）、资格/额度拒绝（409）同理。前端收到这些响应时**保留原恢复上下文**，转为按原号精确查询并核对原资源，**不得据此标记“确定未执行”、不得生成新编号**。
+3. 精确查询找到退款资源时，结果视为“已定位”：将恢复上下文更新为该资源并按其 `status` 展示，但**不表示资金成功**。如需再发起一笔新的正常退款，须重新调用 5.2 取得权威可退资格；**UI 不以本地记录释放或扣减额度**。
+4. 只有“从未发送”的草稿被确定性拒绝（首次请求即收到 `REJECTED` 且该号此前无任何未知记录）时，才可视为该号未执行，并允许用户修改参数后**以新编号**重新提交。
 
-- 按 `用户 ID + 租户（商户号）` 隔离保存：`paymentId`、App（如有）、`merchantRefundNo`、原请求参数（金额、原因）、提交时间、最近一次结果。
-- 关闭弹窗、刷新页面、重新登录后，再次打开同一订单的退款入口时**恢复该上下文**，不自动生成新编号；仅当该笔结果已确定（成功受理或确定性拒绝）后，才允许开始新的退款并生成新编号。
-- 上下文保存在浏览器本地仅用于防误操作，**不作为资金结果依据**；结果以权威查询为准。
+**R3 恢复上下文：先保存，再发送（前端）：**
 
-#### `GET /refunds/by-merchant-refund-no/{merchantRefundNo}` → `Refund`
+1. 生成 `merchantRefundNo` 后、**发出首次 `POST /refunds` 之前**，先持久化恢复上下文：`userId`、租户（商户号）、`paymentId`、作用域信息（见 R4）、`merchantRefundNo`、完整请求参数（`amount` 规范化值、`reason` 规范化值）、`createdAt`、`phase`。
+2. `phase` 取值：
+   - `DRAFT`：已生成编号、尚未发送。可修改参数（编号不变）或丢弃；
+   - `SENT_PENDING`：已开始发送、尚未得到确定结果（含无响应、刷新中断、解析失败、`UNKNOWN`）。**不得修改参数、不得换号、不得自动重发**；
+   - `LOCATED`：已定位到退款资源（记录 `refundId` 与最近 `status`）；
+   - `REJECTED_DRAFT`：仅适用于 R2 第 4 条情形；
+   - `NOT_ACCEPTED`：权威恢复协议确认未受理，允许**同号同参**重新提交。
+3. 写入 `SENT_PENDING` **必须在请求发出之前完成**；任何异常路径（含 JSON 解析失败）都不得删除该记录。
+4. 恢复 `SENT_PENDING` 时**先查询、不自动重发**：调用精确查询；未定位到资源时继续展示“待确认”，由用户手动刷新确认。
+5. 连点、重复打开弹窗、刷新页面不得生成新编号：同一 `userId + 租户 + paymentId` 存在未结束（`DRAFT`/`SENT_PENDING`/`NOT_ACCEPTED`）的上下文时，复用它。
+6. 多标签页：恢复上下文须存放于同源共享存储（如 `localStorage`，按 `userId + 租户` 命名空间隔离），并通过 `storage` 事件或 `BroadcastChannel` 同步；另一标签页存在 `SENT_PENDING` 时，本页同样进入“待确认”并禁止新建。**不得只依赖组件内 `loading` 状态防重**。
+7. 浏览器记录是防误操作辅助，**不是服务端资金锁**；服务端幂等与额度约束必须独立成立。退出登录时可保留该记录（按用户隔离），重新登录同一用户后恢复。
+8. 只有 `LOCATED` 且资源处于终态，或 `REJECTED_DRAFT` 时，才允许用户结束该上下文并开始一笔新的退款（生成新编号）。
 
-按商户退款编号**精确匹配**（在当前租户的幂等作用域内），用于结果未知时的确认。
+**R4 精确查询的作用域必须与创建一致：**
 
-- 找到时返回该退款资源。
-- 找不到时返回 `404 NOT_FOUND`，响应体附 `authoritative: boolean`：为 `true` 仅表示查询直接命中权威数据源且在约定一致性窗口外，**仍不等于确定未受理**；前端据此只调整提示文案，不开放重新提交。
+- 创建请求以 `paymentId` 为入口；精确查询**同样以 `paymentId` 限定作用域**：`GET /refunds/by-merchant-refund-no/{merchantRefundNo}?paymentId=`（必填）。
+- Portal 后端由 `paymentId` 解析所属商户与 App（若幂等作用域最终为 App 级），在该作用域内按编号精确匹配；浏览器不传、也不能指定 App 或商户。这样无论作用域最终为商户级还是 App 级，查询都与创建一致。
+- 返回的退款资源 `paymentId` 必须与请求一致；不一致时前端视为异常，保持“待确认”并提示联系客服，不据此开放新建。
+- 恢复上下文按 R3 保存 `paymentId`，不另存 App ID 作为查询参数。
+
+#### `GET /refunds/by-merchant-refund-no/{merchantRefundNo}?paymentId=` → `Refund`
+
+在 `paymentId` 所确定的幂等作用域内按商户退款编号**精确匹配**（见 R4），用于结果未知时的确认。缺少 `paymentId` 返回 `400 VALIDATION`；订单不存在或不属于当前商户返回 `404 NOT_FOUND`。
+
+- 找到时返回该退款资源（`200`）。找到资源仅表示“已定位”，按资源 `status` 展示。
+- 找不到时返回 `404 NOT_FOUND`，响应体附 `authoritative: boolean`：为 `true` 仅表示查询直接命中权威数据源且在约定一致性窗口外，**仍不等于确定未受理**；前端据此只调整提示文案，不开放重新提交。`404` 响应中订单不存在与编号不存在使用不同 `code`（`PAYMENT_NOT_FOUND` / `REFUND_NOT_FOUND`）**【待核对】**。
 - 一致性说明（读写一致 / 最终一致及延迟上限）**【待核对】**。列表接口 `GET /refunds?merchantRefundNo=` 的模糊/包含匹配**不得**用作恢复依据。
 
 ### 5.4 交易统计 Analytics
@@ -749,8 +780,9 @@
 页面只依赖 `src/services/api/index.ts` 导出的 `api` 对象。后端就绪后：
 
 1. 新建 `src/services/http/api.ts`，用 `fetch` 实现 `MerchantApi`，按第 4 节映射 URL
-2. 统一处理错误：非 2xx 时解析响应体并抛出携带 `httpStatus`、`code`、`outcome`、`requestId` 的 `ApiError`，**保留 HTTP 与错误语义**；仅 `401 UNAUTHENTICATED` 走 5.0 的刷新重试（`withAuth.ts` 已实现），其他错误不自动重试，不得把内部鉴权失败当作会话失效
-3. 在 `src/services/api/index.ts` 中将 `mockApi` 替换为 `httpApi`（可用 `import.meta.env.VITE_USE_MOCK` 切换）
+2. 统一处理错误：非 2xx 时解析响应体并抛出携带 `httpStatus`、`code`、`outcome`、`requestId` 的 `ApiError`，**保留 HTTP 与错误语义**；仅 **HTTP 401 且 `code === "UNAUTHENTICATED"`** 走 5.0 的刷新重试，其他错误不自动重试，不得把内部鉴权失败当作会话失效。**现状：`withAuth.ts` 目前只检查 `code`，`ApiError` 尚无 `httpStatus` 字段，需改造**（见第 8 节）
+3. 资金写操作按 1.3 的规则：网络异常、非 JSON、解析失败、`outcome` 缺失/未知一律按 `UNKNOWN` 处理，且不得清除恢复记录
+4. 在 `src/services/api/index.ts` 中将 `mockApi` 替换为 `httpApi`（可用 `import.meta.env.VITE_USE_MOCK` 切换）
 
 接入真实后端前，须先完成第 8 节中的前端改造项。Mock 只用于验证 UI，**不构成资金验收**，也不代表真实后端已可对接。
 
@@ -774,16 +806,16 @@
 
 ## 8. 前端现状与本协议的差异（待改造）
 
-当前前端与 Mock 按 v1 草案实现（代码保持旧版），以下差异需按本文改造，**改造前前端不可直接对接真实后端**。涉及文件：`src/types/index.ts`、`src/services/api/types.ts`、`src/services/mock/*`、`CreateRefundDialog.vue`、`PaymentDetailPage.vue`、列表/统计/导出/通知/开发者文档页。
+当前前端与 Mock 按 v1 草案实现（代码保持旧版；`MerchantApi.auth` 注释已于 v1.2 更正），以下差异需按本文改造，**改造前前端不可直接对接真实后端**。涉及文件：`src/types/index.ts`、`src/services/api/types.ts`、`src/services/mock/*`、`CreateRefundDialog.vue`、`PaymentDetailPage.vue`、列表/统计/导出/通知/开发者文档页。
 
 | 项 | 前端现状 | 目标 |
 | --- | --- | --- |
-| 退款可退金额 | Mock 以“订单金额 − 已退 − 处理中”计算，未计入 `SUSPENDED`，仅 `SUCCESS` 可退；无资格字段 | 使用权威可退金额 + `refundEligibility` 字符串枚举，仅 `ALLOWED` 且金额 > 0 可提交 |
-| 退款幂等 | 重复编号返回 `DUPLICATE`；成功固定 `CREATED` | 同号同参返回已有资源；不同参数 `IDEMPOTENCY_CONFLICT` |
-| 退款结果未知 | 弹窗每次打开重新生成编号；无待确认状态；Mock 按 `includes` 匹配编号 | 待确认状态 + 按用户/租户隔离的恢复上下文；精确匹配查询；不得据 404 开放重提 |
-| 错误语义 | `ApiError` 仅有 `code` | 增加 `httpStatus`、`outcome`、`requestId` |
-| 统计口径 | 成功率用不同集合计算；无 `asOf`、`terminalCount`；比较值可能为 Infinity；桶仅有 `label` | 按 5.1 集合计算；`asOf`；比较值可为 null；桶使用 `key` |
-| `MerchantApi.auth` 注释 | 称全部无需 Authorization | `logout` 需携带 access token |
+| 退款可退金额 | Mock 以“订单金额 − 已退 − 处理中”计算，未计入 `SUSPENDED`，仅 `SUCCESS` 可退；无资格字段 | 使用权威可退金额 + `refundEligibility`（可为 null）；提交须满足 3.1 全部条件 |
+| 退款幂等 | 重复编号返回 `DUPLICATE`；成功固定 `CREATED` | 同号同参返回已有资源；不同参数 `IDEMPOTENCY_CONFLICT`（不清除原号未知状态，R2） |
+| 退款结果未知 | 弹窗每次打开重新生成编号；无待确认状态；仅组件内 `loading` 防重；Mock 按 `includes` 匹配编号且按商户全局唯一 | R3 先存后发的恢复上下文（`phase` 状态机、多标签页共享）；R4 以 `paymentId` 限定的精确查询；不得据 404 或后续 `REJECTED` 开放重提 |
+| `MerchantApi` 方法 | 无精确查询方法 | 新增 `refunds.findByMerchantRefundNo(paymentId, merchantRefundNo)` |
+| 错误语义 | `ApiError` 仅有 `code`；`withAuth` 仅按 `code` 判断刷新 | `ApiError` 增加 `httpStatus`、`outcome`、`requestId`；`withAuth` 改为 `httpStatus === 401 && code === "UNAUTHENTICATED"`；资金写的解析失败/缺失 outcome 默认 `UNKNOWN` |
+| 统计口径 | 成功率用不同集合计算；无 `asOf`、`terminalCount`；比较值可能为 Infinity；桶仅有 `label`；渠道占比为裸数组 | 按 5.1 集合计算；所有报表顶层 `asOf`；`channel-share` 为 `{ asOf, items }`；比较值可为 null；桶使用 `key` |
 | 测试覆盖 | 未覆盖未知资格、未知枚举、空金额、外部收款展示 | 补充对应 Mock 数据与展示 |
 | 支付状态 | 无 `coreStatus`，不处理 `PART_REFUNDED/REFUNDED` | 按第 2 节映射 |
 | 渠道 / 方式 | 仅 3 个渠道，方式为 `NATIVE/JSAPI/APP/MICROPAY` 等 | 使用核心取值，未知值展示原值 |
