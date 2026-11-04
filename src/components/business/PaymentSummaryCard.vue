@@ -30,7 +30,7 @@ defineProps<{ payment: Payment; linkable?: boolean }>()
       </div>
       <div>
         <dt class="text-muted-foreground">门店</dt>
-        <dd class="mt-0.5 truncate">{{ payment.storeName }}</dd>
+        <dd class="mt-0.5 truncate">{{ payment.storeName ?? '—' }}</dd>
       </div>
       <div>
         <dt class="text-muted-foreground">渠道 / 方式</dt>

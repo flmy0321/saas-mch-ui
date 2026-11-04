@@ -23,7 +23,7 @@ import WebhookDeliveryList from '@/components/business/WebhookDeliveryList.vue'
 import { useAsync } from '@/composables/useAsync'
 import { buildRefundColumns } from '@/pages/refunds/refundColumns'
 import { api } from '@/services/api'
-import { methodLabel } from '@/utils/dictionaries'
+import { methodLabel, paymentSourceLabel } from '@/utils/dictionaries'
 import { formatDateTime, formatMoney } from '@/utils/format'
 import { isPositiveAmount } from '@/utils/money'
 import type { Refund } from '@/types'
@@ -72,8 +72,8 @@ const steps = computed<TimelineStep[]>(() => {
   else if (x.status === 'FAILED') s.push({ title: '支付失败', at: x.failedAt, state: 'failed', note: x.failReason })
   else if (x.status === 'CLOSED') s.push({ title: '订单关闭', at: x.closedAt, state: 'neutral', note: '超时未支付或商户主动关闭' })
   else if (x.status === 'CLOSING') s.push({ title: '关单处理中', state: 'current' })
-  else if (x.status === 'PAYING') s.push({ title: '等待支付结果', state: 'current', note: `订单将于 ${formatDateTime(x.expireAt)} 过期` })
-  else s.push({ title: '等待用户支付', state: 'pending', note: `订单将于 ${formatDateTime(x.expireAt)} 过期` })
+  else if (x.status === 'PAYING') s.push({ title: '等待支付结果', state: 'current', note: x.expireAt ? `订单将于 ${formatDateTime(x.expireAt)} 过期` : undefined })
+  else s.push({ title: '等待用户支付', state: 'pending', note: x.expireAt ? `订单将于 ${formatDateTime(x.expireAt)} 过期` : undefined })
   for (const r of [...(refunds.data.value?.items ?? [])].reverse()) {
     s.push({
       title: `退款 ${formatMoney(r.amount)}`,
@@ -95,6 +95,8 @@ const baseItems = computed(() => {
     { key: 'store', label: '门店', value: x.storeName },
     { key: 'channel', label: '支付渠道', value: x.channel },
     { key: 'method', label: '支付方式', value: methodLabel(x.method) },
+    { key: 'source', label: '订单来源', value: paymentSourceLabel(x.source) },
+    { key: 'coreStatus', label: '核心状态', value: x.coreStatus || '—' },
     { key: 'createdAt', label: '创建时间', value: formatDateTime(x.createdAt) },
     { key: 'paidAt', label: '支付时间', value: formatDateTime(x.paidAt) },
   ]
@@ -192,8 +194,10 @@ function onRefundCreated(r: Refund) {
                 <span v-else class="text-muted-foreground">—</span>
               </template>
               <template #store>
-                <RouterLink :to="`/stores/${p.storeId}`" class="text-primary hover:underline">{{ p.storeName }}</RouterLink>
+                <RouterLink v-if="p.storeId" :to="`/stores/${p.storeId}`" class="text-primary hover:underline">{{ p.storeName ?? p.storeId }}</RouterLink>
+                <span v-else class="text-muted-foreground">{{ p.storeName ?? '—' }}</span>
               </template>
+              <template #coreStatus="{ item }"><span class="font-mono text-[13px]">{{ item.value }}</span></template>
               <template #channel><ChannelBadge :channel="p.channel" /></template>
             </DescriptionList>
           </Card>

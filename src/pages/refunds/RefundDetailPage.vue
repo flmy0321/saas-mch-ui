@@ -131,12 +131,16 @@ const statusHint = computed(() => {
                 <span class="flex items-center gap-1 font-mono text-[13px]">{{ item.value }}<CopyButton :value="item.value!" /></span>
               </template>
               <template #merchantRefundNo="{ item }"><span class="font-mono text-[13px]">{{ item.value }}</span></template>
-              <template #merchantOrderNo="{ item }"><span class="font-mono text-[13px]">{{ item.value }}</span></template>
+              <template #merchantOrderNo="{ item }">
+                <span v-if="item.value" class="font-mono text-[13px]">{{ item.value }}</span>
+                <span v-else class="text-muted-foreground">—</span>
+              </template>
               <template #paymentId="{ item }">
                 <RouterLink :to="`/payments/${item.value}`" class="font-mono text-[13px] text-primary hover:underline">{{ item.value }}</RouterLink>
               </template>
               <template #store>
-                <RouterLink :to="`/stores/${r.storeId}`" class="text-primary hover:underline">{{ r.storeName }}</RouterLink>
+                <RouterLink v-if="r.storeId" :to="`/stores/${r.storeId}`" class="text-primary hover:underline">{{ r.storeName ?? r.storeId }}</RouterLink>
+                <span v-else class="text-muted-foreground">{{ r.storeName ?? '—' }}</span>
               </template>
               <template #channel><ChannelBadge :channel="r.channel" /></template>
             </DescriptionList>

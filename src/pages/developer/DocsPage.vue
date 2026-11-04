@@ -37,17 +37,17 @@ headers['Authorization'] = \`PAY-HMAC-SHA256 keyId=\${KEY_ID},ts=\${timestamp},n
   body: JSON.stringify({
     appId: 'app_live_8f2a',
     merchantOrderNo: 'ORD202601010001',
-    amount: 12800,            // 单位：分
+    amount: '128.00',         // 单位：元，十进制字符串
     subject: '精品咖啡豆 250g',
     channel: 'WECHAT',
-    method: 'NATIVE',
+    method: 'QR',
     storeId: 'st_001',
     expireInSeconds: 900,
   }),
 })`,
     curl: `curl -X POST https://api.pay.example.com/v1/payments \\
   -H "Authorization: ..." -H "Content-Type: application/json" \\
-  -d '{"appId":"app_live_8f2a","merchantOrderNo":"ORD202601010001","amount":12800,"subject":"精品咖啡豆 250g","channel":"WECHAT","method":"NATIVE"}'`,
+  -d '{"appId":"app_live_8f2a","merchantOrderNo":"ORD202601010001","amount":"128.00","subject":"精品咖啡豆 250g","channel":"WECHAT","method":"QR"}'`,
   },
   refund: {
     node: `await fetch('https://api.pay.example.com/v1/refunds', {
@@ -56,13 +56,13 @@ headers['Authorization'] = \`PAY-HMAC-SHA256 keyId=\${KEY_ID},ts=\${timestamp},n
   body: JSON.stringify({
     paymentId: 'P20260101000123',
     merchantRefundNo: 'MR20260101000001', // 幂等键
-    amount: 3200,
+    amount: '32.00',
     reason: '用户申请退货',
   }),
 })`,
     curl: `curl -X POST https://api.pay.example.com/v1/refunds \\
   -H "Authorization: ..." -H "Content-Type: application/json" \\
-  -d '{"paymentId":"P20260101000123","merchantRefundNo":"MR20260101000001","amount":3200,"reason":"用户申请退货"}'`,
+  -d '{"paymentId":"P20260101000123","merchantRefundNo":"MR20260101000001","amount":"32.00","reason":"用户申请退货"}'`,
   },
   webhook: {
     node: `app.post('/webhooks/pay', express.raw({ type: 'application/json' }), (req, res) => {
@@ -81,7 +81,7 @@ X-Pay-Event-Id: evt_01HX...
 X-Pay-Timestamp: 1767225600
 X-Pay-Signature: 5d41402abc4b2a76b9719d911017c592
 
-{"id":"evt_01HX...","type":"payment.succeeded","data":{"paymentId":"P2026...","amount":12800}}`,
+{"id":"evt_01HX...","eventType":"PAYMENT.SUCCEEDED","isTest":false,"data":{"paymentId":"P2026...","amount":"128.00"}}`,
   },
 } as const
 
@@ -97,7 +97,7 @@ const errors = [
 
 <template>
   <div class="flex flex-col gap-5">
-    <PageHeader title="接入文档" description="服务端通过开放接口创建支付、申请退款，并通过 Webhook 接收结果通知。所有金额单位均为分。">
+    <PageHeader title="接入文档" description="服务端通过开放接口创建支付、申请退款，并通过 Webhook 接收结果通知。金额为以元为单位的十进制字符串（如 &quot;128.00&quot;）。签名算法与通知重试策略以核心通知契约为准，当前示例待确认。">
       <template #actions>
         <SegmentedControl v-model="lang" aria-label="示例语言" :options="[{ value: 'node', label: 'Node.js' }, { value: 'curl', label: 'cURL' }]" />
       </template>
@@ -117,8 +117,8 @@ const errors = [
           <p class="mb-3 text-[13px] leading-relaxed text-muted-foreground">
             <template v-if="s.id === 'auth'">每个请求需在 Authorization 头中携带 HMAC-SHA256 签名，时间戳与服务器偏差不得超过 5 分钟。</template>
             <template v-else-if="s.id === 'create'">创建支付订单后返回支付参数，前端据此唤起支付。merchantOrderNo 在同一商户下必须唯一。</template>
-            <template v-else-if="s.id === 'refund'">对支付成功的订单发起退款，支持多次部分退款。merchantRefundNo 作为幂等键，重复提交返回同一笔退款。</template>
-            <template v-else>收到通知后请先校验签名，再返回 HTTP 2xx。处理逻辑应异步执行并保证幂等。</template>
+            <template v-else-if="s.id === 'refund'">对支付成功的订单发起退款，支持多次部分退款。merchantRefundNo 作为幂等键：同号同参返回已有退款，同号不同参返回 IDEMPOTENCY_CONFLICT。结果未知时请用原编号查询确认，切勿换号重提。</template>
+            <template v-else>收到通知后请先校验签名，再返回 HTTP 2xx。处理逻辑应异步执行并按事件 ID 保证幂等；isTest 为 true 的测试推送不应触发业务处理。</template>
           </p>
           <div class="relative overflow-hidden rounded-lg bg-code text-code-foreground">
             <CopyButton :value="snippets[s.id as keyof typeof snippets][lang]" class="absolute right-2 top-2 text-code-foreground/70 hover:bg-white/10 hover:text-code-foreground" />

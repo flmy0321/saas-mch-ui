@@ -50,7 +50,12 @@ const columns: ColumnDef<WebhookDelivery>[] = [
     header: '事件',
     cell: ({ row }) =>
       h('div', { class: 'flex flex-col' }, [
-        h('span', { class: 'font-mono text-[13px]' }, row.original.eventType),
+        h('span', { class: 'flex items-center gap-2 font-mono text-[13px]' }, [
+          row.original.eventType,
+          row.original.isTest
+            ? h('span', { class: 'rounded bg-muted px-1.5 py-0.5 font-sans text-[11px] text-muted-foreground' }, '测试')
+            : null,
+        ]),
         h('span', { class: 'text-xs text-muted-foreground' }, webhookEventLabel(row.original.eventType)),
       ]),
   },
@@ -74,6 +79,7 @@ const detailItems = computed(() => {
   return [
     { key: 'eventId', label: '事件 ID', value: d.eventId },
     { key: 'eventType', label: '事件类型', value: d.eventType },
+    { key: 'isTest', label: '测试推送', value: d.isTest ? '是' : '否' },
     { key: 'resourceId', label: '关联对象', value: d.resourceId },
     { key: 'appId', label: 'AppID', value: d.appId },
     { key: 'url', label: '回调地址', value: d.url },

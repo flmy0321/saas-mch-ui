@@ -154,6 +154,8 @@ export const collectionVerificationMeta = (v: string | null | undefined) =>
 export const webhookStatusMeta = (v: string | null | undefined) => lookup(WEBHOOK_STATUS, v) ?? unknownMeta(v)
 export const channelMeta = (v: string | null | undefined): ChannelMeta & { unknown?: boolean } =>
   lookup(CHANNEL, v) ?? { label: v || '—', short: v || '—', color: 'var(--muted-foreground)', unknown: true }
+export const PAYMENT_SOURCE: Record<'API' | 'EXTERNAL', string> = { API: '开放 API', EXTERNAL: '外部收款' }
+export const paymentSourceLabel = (v: string | null | undefined) => lookup(PAYMENT_SOURCE, v) ?? (v || '—')
 export const methodLabel = (v: string | null | undefined) => lookup(METHOD, v) ?? (v || '—')
 export const webhookEventLabel = (v: string | null | undefined) => lookup(WEBHOOK_EVENT, v) ?? (v || '—')
 export const isKnown = (map: Record<string, unknown>, v: string | null | undefined) => lookup(map, v) !== undefined
