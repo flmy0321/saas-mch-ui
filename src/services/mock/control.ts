@@ -11,10 +11,32 @@ import { ApiError } from '@/services/api/types'
  */
 export type RefundFault = 'none' | 'lost-after-accept' | 'upstream-unknown' | 'unavailable' | 'malformed' | 'mismatch'
 
-const state: { failNetwork: boolean; refundFault: RefundFault } = { failNetwork: false, refundFault: 'none' }
+/**
+ * 身份演示场景（仅 Mock）：
+ * - single：一个可选商户（默认）
+ * - multi：两个可选商户（第二个演示数据与第一个共用）
+ * - none：账号凭据正确但没有任何可用商户成员资格
+ * - revoked：返回商户列表，但确认时成员资格已被收回（403）
+ * - select-unavailable：确认商户时返回 503，演示“状态无法确认”
+ */
+export type TenantScenario = 'single' | 'multi' | 'none' | 'revoked' | 'select-unavailable'
+
+const state: { failNetwork: boolean; refundFault: RefundFault; tenantScenario: TenantScenario } = {
+  failNetwork: false,
+  refundFault: 'none',
+  tenantScenario: 'single',
+}
 
 export function setMockNetworkFailure(value: boolean) {
   state.failNetwork = value
+}
+
+export function setMockTenantScenario(scenario: TenantScenario) {
+  state.tenantScenario = scenario
+}
+
+export function getMockTenantScenario(): TenantScenario {
+  return state.tenantScenario
 }
 
 export function setMockRefundFault(fault: RefundFault) {
@@ -26,7 +48,7 @@ export function getMockRefundFault(): RefundFault {
 }
 
 if (typeof window !== 'undefined') {
-  ;(window as unknown as Record<string, unknown>).__mock = { setMockNetworkFailure, setMockRefundFault }
+  ;(window as unknown as Record<string, unknown>).__mock = { setMockNetworkFailure, setMockRefundFault, setMockTenantScenario }
 }
 
 export async function delay<T>(fn: () => T, ms = 260 + Math.random() * 320): Promise<T> {

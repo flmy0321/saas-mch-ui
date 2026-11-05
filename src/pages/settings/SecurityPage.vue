@@ -12,7 +12,16 @@ import ErrorState from '@/components/ui/ErrorState.vue'
 import StatusBadge from '@/components/ui/StatusBadge.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { useAsync } from '@/composables/useAsync'
-import { api } from '@/services/api'
+import { ApiError, api } from '@/services/api'
+
+function describeError(e: unknown, suffix?: string) {
+  if (e instanceof ApiError) {
+    if (e.httpStatus === 503) return '身份服务暂不可用，请稍后重试'
+    if (e.code === 'INVALID_PASSWORD') return '当前密码不正确'
+    return [e.message, suffix].filter(Boolean).join('；')
+  }
+  return e instanceof Error ? e.message : suffix
+}
 import { formatRelative } from '@/utils/format'
 import type { LoginSession } from '@/types'
 
@@ -37,11 +46,12 @@ async function changePassword() {
   saving.value = true
   try {
     await api.account.changePassword({ current: pw.current, next: pw.next })
-    toast.success('密码已修改', { description: '其他设备上的登录将在下次请求时失效' })
+    toast.success('密码已修改', { description: '当前会话保留，其他设备的登录已失效' })
     Object.assign(pw, { current: '', next: '', confirm: '' })
     submitted.value = false
+    sessions.reload()
   } catch (e) {
-    toast.error('修改失败', { description: e instanceof Error ? e.message : undefined })
+    toast.error('修改失败', { description: describeError(e, '密码未修改，其他会话不受影响') })
   } finally {
     saving.value = false
   }
@@ -65,7 +75,13 @@ async function revoke() {
     revoking.value = null
     sessions.reload()
   } catch (e) {
-    toast.error('操作失败', { description: e instanceof Error ? e.message : undefined })
+    if (e instanceof ApiError && e.httpStatus === 404) {
+      toast.error('该会话无法下线', { description: '会话可能已结束，列表已刷新' })
+      revoking.value = null
+      sessions.reload()
+    } else {
+      toast.error('操作失败', { description: describeError(e) })
+    }
   } finally {
     revokeBusy.value = false
   }

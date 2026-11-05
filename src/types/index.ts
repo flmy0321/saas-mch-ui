@@ -249,6 +249,22 @@ export interface AuthTokens {
   refreshExpiresIn: number
 }
 
+/** 第一步（POST /auth/login）结果：仅表示凭据已验证，尚未建立正式登录 */
+export interface MerchantSelection {
+  /** 一次性选择凭证：只留在当前页面内存，不得持久化或写入 URL/日志 */
+  selectionToken: string
+  /** UTC epoch 毫秒（不是 expiresIn 秒） */
+  expiresAt: number
+  /** 可选商户标识；当前契约只有 ID，没有名称/Logo */
+  tenantIds: string[]
+}
+
+export interface SelectMerchantInput {
+  selectionToken: string
+  tenantId: string
+}
+
+/** 第二步（POST /auth/select-merchant）结果：正式 token 绑定所选商户 */
 export interface LoginResult extends AuthTokens {
   user: CurrentUser
 }

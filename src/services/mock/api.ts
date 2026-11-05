@@ -18,7 +18,7 @@ import type {
 import { ApiError, type ApiErrorInit, type MerchantApi } from '@/services/api/types'
 import { fenToAmount, isAmountInput, toFen } from '@/utils/money'
 import { delay, getMockRefundFault } from './control'
-import { assertAuthenticated, mockAuth } from './auth'
+import { assertAuthenticated, mockAuth, mockIdentitySessions } from './auth'
 import {
   COUNTED_REFUND,
   DAY,
@@ -37,7 +37,6 @@ import {
   randomHex,
   recomputePayment,
   refunds,
-  sessions,
   startOfDay,
   stores,
   toShanghaiWall,
@@ -673,15 +672,18 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
       }, 500),
     changePassword: ({ current, next }) =>
       delay(() => {
-        if (current !== 'Demo@123456') fail('当前密码不正确（演示密码：Demo@123456）', 'VALIDATION', 400)
-        if (next.length < 8) fail('新密码至少 8 位', 'VALIDATION', 400)
+        const sid = assertAuthenticated()
+        if (!mockIdentitySessions.checkPassword(current)) fail('当前密码不正确', 'INVALID_PASSWORD', 400)
+        if (next.length < 8 || !/[A-Za-z]/.test(next) || !/\d/.test(next) || next === current) {
+          fail('新密码不符合安全策略', 'VALIDATION', 400)
+        }
+        mockIdentitySessions.setPassword(next)
+        mockIdentitySessions.revokeOthers(sid)
       }, 700),
-    sessions: () => delay(() => sessions),
+    sessions: () => delay(() => mockIdentitySessions.list(assertAuthenticated())),
     revokeSession: (id) =>
       delay(() => {
-        const i = sessions.findIndex((s) => s.id === id && !s.current)
-        if (i < 0) fail('会话不存在或不可下线', 'NOT_FOUND', 404)
-        sessions.splice(i, 1)
+        if (!mockIdentitySessions.revoke(assertAuthenticated(), id)) fail('会话不存在或不可下线', 'NOT_FOUND', 404)
       }, 400),
     notifications: () => delay(() => notifications, 200),
     markAllRead: () =>

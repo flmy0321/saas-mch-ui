@@ -14,6 +14,8 @@ import type {
   LoginResult,
   LoginSession,
   Merchant,
+  MerchantSelection,
+  SelectMerchantInput,
   MerchantApp,
   Notification,
   Paginated,
@@ -37,12 +39,20 @@ import type {
  * Mock 实现与未来的真实 HTTP 实现都必须满足该接口，页面只依赖此接口。
  */
 export interface MerchantApi {
-  /** 认证接口：captcha / login / refresh 无需 Authorization 头；logout 需携带当前 access token */
+  /**
+   * 身份接口（identity-http v0.2，Base URL /api/portal/v1）：captcha / login / selectMerchant / refresh 无需 Authorization；
+   * logout 携带当前 access 的 Bearer 头。auth.* 均不套业务自动刷新包装。
+   */
   auth: {
     captcha(): Promise<Captcha>
-    login(input: LoginInput): Promise<LoginResult>
+    /** 第一步：只验证凭据，返回商户选择；不得据此保存 token 或进入工作台 */
+    login(input: LoginInput): Promise<MerchantSelection>
+    /** 第二步：显式选择商户后才建立正式会话 */
+    selectMerchant(input: SelectMerchantInput): Promise<LoginResult>
+    /** 一次性：并发时仅一个成功，其余 409 REFRESH_ALREADY_USED（不撤销赢家） */
     refresh(refreshToken: string): Promise<AuthTokens>
-    logout(refreshToken: string): Promise<void>
+    /** 幂等 204；accessToken 作为 Bearer 头 */
+    logout(accessToken: string): Promise<void>
   }
   dashboard: {
     summary(): Promise<DashboardSummary>

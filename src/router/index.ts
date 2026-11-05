@@ -2,7 +2,9 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { toast } from 'vue-sonner'
 import AppLayout from '@/layouts/AppLayout.vue'
 import { tokenStorage } from '@/services/auth/token'
-import { setUnauthenticatedHandler } from '@/services/api'
+import { setUnauthenticatedHandler, type AuthLossReason } from '@/services/api'
+import { pinia } from '@/stores'
+import { useSessionStore } from '@/stores/session'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -135,11 +137,35 @@ router.beforeEach((to) => {
   return true
 })
 
-setUnauthenticatedHandler(() => {
+const LOSS_MESSAGE: Record<AuthLossReason, string> = {
+  expired: '登录已过期，请重新登录',
+  uncertain: '登录状态无法确认，请重新登录',
+  superseded: '登录状态已在其他页面变更',
+}
+
+/** 本页登录被结束：清理本页租户数据并回到登录页；新登录由其他页面写入时整页重载，丢弃旧页面缓存 */
+function leaveSession(reason: AuthLossReason) {
+  const session = useSessionStore(pinia)
   const current = router.currentRoute.value
+  if (tokenStorage.isAuthenticated() && tokenStorage.version()?.generation !== session.generation) {
+    window.location.assign(current.meta.public ? '/dashboard' : current.fullPath)
+    return
+  }
+  session.reset()
   if (current.meta.public) return
-  toast.error('登录已过期，请重新登录')
+  toast.error(LOSS_MESSAGE[reason])
   router.replace({ path: '/login', query: { redirect: current.fullPath } })
+}
+
+setUnauthenticatedHandler(leaveSession)
+
+/** 跨标签页：只监听 generation/revision 的变化，不广播任何凭据 */
+tokenStorage.subscribe((snap) => {
+  const session = useSessionStore(pinia)
+  const gen = snap?.tokens ? snap.generation : null
+  if (gen === session.generation) return
+  if (!gen && !session.generation) return
+  leaveSession('superseded')
 })
 
 router.afterEach((to) => {
