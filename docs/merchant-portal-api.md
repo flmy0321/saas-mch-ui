@@ -36,7 +36,7 @@
 | Base URL | `/api/portal/v1`（与前端同域，或通过网关反向代理） |
 | 协议 | HTTPS，`Content-Type: application/json; charset=utf-8` |
 | 鉴权 | Bearer Token：仅 `GET /auth/captcha`、`POST /auth/login`、`POST /auth/select-merchant`、`POST /auth/refresh` 无需 access token；其余所有接口（**含 `POST /auth/logout`**）须携带 `Authorization: Bearer <accessToken>`，详见 5.0。商户维度由 token 对应的用户确定，**任何请求参数都不得用于切换商户** |
-| CSRF | 不使用 Cookie 鉴权，因此无需 CSRF Token；服务端不得从 Cookie 读取凭证 |
+| CSRF | 不使用 Cookie 鉴权，因此无需 CSRF Token；服务端不得从 Cookie 读取登录凭证。仅允许服务端下发的 HttpOnly、SameSite 匿名挑战 Cookie 绑定验证码与商户选择（见 5.0） |
 | CORS | 如前后端不同域，仅放行商户后台域名，允许 `Authorization` 请求头，不要使用 `Access-Control-Allow-Origin: *` |
 | 字段命名 | JSON 字段使用 lowerCamelCase |
 | 时间 | ISO 8601 UTC 字符串，如 `2026-11-02T08:30:00.000Z`；前端按浏览器时区展示 |
@@ -378,13 +378,20 @@
 
 ### 5.0 认证 Auth（两阶段登录，身份契约 v0.2）
 
-> **状态**：两阶段登录路径与字段已获用户确认，权威资料为 `merchant-platform/docs/contracts/identity-http-v0.2.openapi.json` 与 `src/identity/portal-contract.mjs`（SHA-256 `3d78d91f…6846ee`）。后端已有候选组件与回环 HTTP 测试，**但数据库、生产验证码、浏览器来源绑定与生产部署均未验收**；本 UI 当前仅以 Mock 模式运行，**不代表真实商户登录已上线**。本节不改变任何资金规则。
+> **状态**：两阶段登录路径与字段已获用户确认，权威资料为 `merchant-platform/docs/contracts/identity-http-v0.2.openapi.json` 与 `src/identity/portal-contract.mjs`（SHA-256 `3d78d91f…6846ee`）。后端已有候选组件与回环 HTTP 测试，**但数据库、生产验证码、浏览器来源绑定与生产部署均未验收**；前端已实现 HTTP 模式（仅与本地联调桩验证过同源 Cookie 流程），默认仍为 Mock，**不代表真实商户登录已上线**。本节不改变任何资金规则。
 
-Base URL `/api/portal/v1`，同域部署优先；跨域须后端显式允许来源（不依赖 `*`）。身份凭据只经 `Authorization: Bearer`，不读 Cookie / query。所有身份响应 `Cache-Control: no-store`。错误体 `{code,message,requestId}`。
+Base URL `/api/portal/v1`，**必须同源**：开发经 Vite 代理 `/api`，生产经同源反向代理；前端不支持跨域 Base URL。**登录凭证只经 `Authorization: Bearer`，服务端不从 Cookie / query 读取登录凭证**；允许使用匿名挑战绑定 Cookie（见下）。所有身份响应 `Cache-Control: no-store`。错误体 `{code,message,requestId}`。
+
+#### 匿名挑战绑定 Cookie
+
+- 由服务端在 `GET /auth/captcha` 时生成并下发，`HttpOnly`、`SameSite`；名称、值、期限、签名密钥与 `Path` 均由后台负责。
+- 用途仅为把验证码、`login` 与 `select-merchant` 绑定到同一浏览器；**不是登录凭证**，不能替代 Bearer，正式业务接口不依赖它。
+- 前端不读取、生成或手工拼接该 Cookie；所有请求使用 `fetch(..., { credentials: 'same-origin' })` 由浏览器自动携带。三步请求须由同一浏览器发出；Cookie 缺失或不匹配时按服务端错误码处理（如 `400 CAPTCHA_INVALID`、`401 INVALID_CREDENTIALS`），前端不重放、不回退 Mock。
+- 开发代理（`vite.config.ts`）：`/api` → `PORTAL_DEV_PROXY_TARGET`，`changeOrigin: false` 保留浏览器 Host，`cookieDomainRewrite: ''` 仅去掉 `Domain` 属性使 Cookie 落在开发源上，不改名称/值。生产反向代理须同样透传 `Set-Cookie` / `Cookie`。
 
 #### `GET /auth/captcha`
 
-响应 `Captcha { captchaId, image, expiresIn }`。`image` 为 PNG/SVG data URL，前端只作 `<img src>`；`expiresIn` 为秒，前端按返回值判断到期（不写死）。4 位 ASCII、大小写不敏感、一次性（校验后即作废，含密码错误）。提交失败仍停留凭据步骤时重新获取。
+响应 `Captcha { captchaId, image, expiresIn }`。`image` 为后台返回的 PNG data URL（`data:image/png;base64,…`），HTTP 模式前端校验前缀后直接作 `<img src>`，不接受远程 URL 或其他类型（格式不符视为响应异常）；响应同时下发匿名挑战 Cookie；`expiresIn` 为秒，前端按返回值判断到期（不写死）。4 位 ASCII、大小写不敏感、一次性（校验后即作废，含密码错误）。提交失败仍停留凭据步骤时重新获取。
 
 #### `POST /auth/login`（第一步：验证凭据）
 
@@ -433,6 +440,14 @@ Base URL `/api/portal/v1`，同域部署优先；跨域须后端显式允许来�
 #### 前端模式
 
 `VITE_API_MODE=mock | http` 必须显式设置，无失败自动回退。演示账号与一键填入仅在 Mock 模式开发构建出现；Mock 内存 Map 仅供演示，不代表真实持久化或安全验证码。
+
+HTTP 模式实现位于 `src/services/http/`（`client.ts` 统一 fetch，`api.ts` 实现 `MerchantApi`），外层仍套 `withAuth`（refresh 规则不变）。要点：
+
+- 固定相对路径 `/api/portal/v1`；`credentials: 'same-origin'`、`cache: 'no-store'`、`redirect: 'error'`、15 秒超时。
+- `captcha / login / select-merchant / refresh` 不带 Authorization；`logout` 带调用方给定的 access；其余业务接口每次发送时读取共享存储中的最新 access。
+- 无响应（网络/超时）抛 `httpStatus = 0`，不自动重试；非 2xx 按 `{code,message,requestId}` 转为 `ApiError`；资金写 2xx 原样交由调用方分类。
+- `login` 响应校验 `selectionToken / expiresAt / tenantIds`，格式不符视为响应异常，不进入商户选择。
+- 开发联调：`VITE_API_MODE=http` 时 `PORTAL_DEV_PROXY_TARGET`（非 `VITE_` 前缀，不进入产物）必填，否则 Vite 启动即报错。
 
 ### 5.1 工作台 Dashboard
 
