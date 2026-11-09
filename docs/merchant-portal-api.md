@@ -378,7 +378,7 @@
 
 ### 5.0 认证 Auth（两阶段登录，身份契约 v0.2）
 
-> **状态**：两阶段登录路径与字段已获用户确认，权威资料为 `merchant-platform/docs/contracts/identity-http-v0.2.openapi.json` 与 `src/identity/portal-contract.mjs`（SHA-256 `3d78d91f…6846ee`）。后端已有候选组件与回环 HTTP 测试，**但数据库、生产验证码、浏览器来源绑定与生产部署均未验收**；前端已实现 HTTP 模式（仅与本地联调桩验证过同源 Cookie 流程），默认仍为 Mock，**不代表真实商户登录已上线**。本节不改变任何资金规则。
+> **状态**：两阶段登录路径与字段已获用户确认，权威资料为 `merchant-platform/docs/contracts/identity-http-v0.2.openapi.json` 与 `src/identity/portal-contract.mjs`（SHA-256 `3d78d91f…6846ee`）。后端验证分项记录：**028** 真实 MySQL 领域/维护测试已通过；**029** 真实 PNG 验证码及 loopback HTTP 测试已通过；匿名 Cookie 签名/过期/重复、配置拒绝与 HTTP 登录流程的定向测试已通过（SQL 替身）。**尚未完成**：真实数据库 + 后台 HTTP + 浏览器的联合验收，以及生产部署（可信代理 / clientKey 规则、`allowedOrigins`）。前端已实现 HTTP 模式（仅与本地联调桩验证过同源 Cookie 流程，后台复核为代码级兼容），默认仍为 Mock，**不代表真实商户登录已上线**；前端实现全部接口不表示后台所有业务接口已实现。本节不改变任何资金规则。
 
 Base URL `/api/portal/v1`，**必须同源**：开发经 Vite 代理 `/api`，生产经同源反向代理；前端不支持跨域 Base URL。**登录凭证只经 `Authorization: Bearer`，服务端不从 Cookie / query 读取登录凭证**；允许使用匿名挑战绑定 Cookie（见下）。所有身份响应 `Cache-Control: no-store`。错误体 `{code,message,requestId}`。
 
@@ -387,7 +387,12 @@ Base URL `/api/portal/v1`，**必须同源**：开发经 Vite 代理 `/api`，�
 - 由服务端在 `GET /auth/captcha` 时生成并下发，`HttpOnly`、`SameSite`；名称、值、期限、签名密钥与 `Path` 均由后台负责。
 - 用途仅为把验证码、`login` 与 `select-merchant` 绑定到同一浏览器；**不是登录凭证**，不能替代 Bearer，正式业务接口不依赖它。
 - 前端不读取、生成或手工拼接该 Cookie；所有请求使用 `fetch(..., { credentials: 'same-origin' })` 由浏览器自动携带。三步请求须由同一浏览器发出；Cookie 缺失或不匹配时按服务端错误码处理（如 `400 CAPTCHA_INVALID`、`401 INVALID_CREDENTIALS`），前端不重放、不回退 Mock。
-- 开发代理（`vite.config.ts`）：`/api` → `PORTAL_DEV_PROXY_TARGET`，`changeOrigin: false` 保留浏览器 Host，`cookieDomainRewrite: ''` 仅去掉 `Domain` 属性使 Cookie 落在开发源上，不改名称/值。生产反向代理须同样透传 `Set-Cookie` / `Cookie`。
+- 后台实际属性（供参考，前端不依赖、不写死）：`HttpOnly; SameSite=Strict; Path=/`，不设置 `Domain`；生产 `Secure`，名称 `__Host-portal-anonymous`（`__Host-` 前缀要求 `Path=/`）；本地 HTTP 且明确 `secure=false` 时名称 `portal-anonymous`。有效期默认 1800 秒，自签发计时、不随请求滚动，部署可配置 60–86400 秒。
+- 因 `Path=/`，业务请求也可能携带该 Cookie，属正常；服务端从不把它当作登录凭证，前端也不得依赖“业务请求不带 Cookie”。
+- Cookie 缺失、篡改、重复或过期时，后台重新签发新的随机绑定，不沿用未验证值。此时带旧挑战提交 `login` 返回 `400 CAPTCHA_INVALID`；带旧 `selectionToken` 提交选择返回 `401 INVALID_CREDENTIALS`。前端**不自动重发、不调用 refresh**，回到凭据步骤并重新获取验证码。
+- Cookie 不是 refresh 的授权条件（refresh 仅凭 `refreshToken`）；匿名 Cookie 过期不会注销已建立的 Bearer 会话。
+- 开发代理（`vite.config.ts`）：`/api` → `PORTAL_DEV_PROXY_TARGET`，`changeOrigin: false` 保留浏览器 `Host` 与 `Origin`；`cookieDomainRewrite: ''` 仅在上游意外带 `Domain` 时去掉该属性，对当前后台通常无实际作用。`changeOrigin: false` 不能替代后台来源配置：后台 `allowedOrigins` 必须明确包含浏览器页面源（含端口）。
+- 生产反向代理：原样转发 `Set-Cookie` / `Cookie` 并保留 `Origin`，保持浏览器同源；不添加 `Domain`，不改写名称、`Path`、`Secure` 或 `SameSite`；**不得缓存带 `Set-Cookie` 的身份响应**给其他浏览器。
 
 #### `GET /auth/captcha`
 
@@ -815,7 +820,7 @@ HTTP 模式实现位于 `src/services/http/`（`client.ts` 统一 fetch，`api.t
 页面只依赖 `src/services/api/index.ts` 导出的 `api` 对象。后端就绪后：
 
 1. 新建 `src/services/http/api.ts`，用 `fetch` 实现 `MerchantApi`，按第 4 节映射 URL
-2. 统一处理错误：非 2xx 时解析响应体并抛出携带 `httpStatus`、`code`、`outcome`、`requestId` 的 `ApiError`，**保留 HTTP 与错误语义**；仅 **HTTP 401 且 `code === "UNAUTHENTICATED"`** 走 5.0 的刷新重试，其他错误不自动重试，不得把内部鉴权失败当作会话失效。**现状：`withAuth.ts` 目前只检查 `code`，`ApiError` 尚无 `httpStatus` 字段，需改造**（见第 8 节）
+2. 统一处理错误：非 2xx 时解析响应体并抛出携带 `httpStatus`、`code`、`outcome`、`requestId` 的 `ApiError`，**保留 HTTP 与错误语义**；仅 **HTTP 401 且 `code === "UNAUTHENTICATED"`** 走 5.0 的刷新重试，其他错误不自动重试，不得把内部鉴权失败当作会话失效。**现状：已实现**——`ApiError` 已携带 `httpStatus`（无响应为 `0`）、`code`、`outcome`、`requestId`；`withAuth.ts` 已按 `httpStatus === 401 && code === "UNAUTHENTICATED"` 判定刷新
 3. 资金写操作按 1.3 的响应分类优先级：合法且匹配的 2xx `Refund` 为 `LOCATED`（不要求 `outcome`）；无响应、2xx 资源损坏或不匹配、非 JSON、解析失败、错误响应缺失或未知 `outcome` 为 `UNKNOWN`，且不得清除恢复记录
 4. 在 `src/services/api/index.ts` 中将 `mockApi` 替换为 `httpApi`（可用 `import.meta.env.VITE_USE_MOCK` 切换）
 
@@ -849,7 +854,7 @@ HTTP 模式实现位于 `src/services/http/`（`client.ts` 统一 fetch，`api.t
 | 退款幂等 | 重复编号返回 `DUPLICATE`；成功固定 `CREATED` | 同号同参返回已有资源；不同参数 `IDEMPOTENCY_CONFLICT`（不清除原号未知状态，R2） |
 | 退款结果未知 | 弹窗每次打开重新生成编号；无待确认状态；仅组件内 `loading` 防重；Mock 按 `includes` 匹配编号且按商户全局唯一 | R3 先存后发的恢复上下文（`phase` 状态机、多标签页共享）；R4 以 `paymentId` 限定的精确查询；不得据 404 或后续 `REJECTED` 开放重提 |
 | `MerchantApi` 方法 | 无精确查询方法 | 新增 `refunds.findByMerchantRefundNo(paymentId, merchantRefundNo)` |
-| 错误语义 | `ApiError` 仅有 `code`；`withAuth` 仅按 `code` 判断刷新 | `ApiError` 增加 `httpStatus`、`outcome`、`requestId`；`withAuth` 改为 `httpStatus === 401 && code === "UNAUTHENTICATED"`；资金写按 1.3 分类优先级判定（合法匹配的 2xx 为 `LOCATED`，错误响应缺失/未知 outcome 为 `UNKNOWN`） |
+| 错误语义 | **已完成**：`ApiError` 已有 `httpStatus`、`outcome`、`requestId`；`withAuth` 已按 HTTP 401 + `UNAUTHENTICATED` 判定 | （已达成）`ApiError` 增加 `httpStatus`、`outcome`、`requestId`；`withAuth` 改为 `httpStatus === 401 && code === "UNAUTHENTICATED"`；资金写按 1.3 分类优先级判定（合法匹配的 2xx 为 `LOCATED`，错误响应缺失/未知 outcome 为 `UNKNOWN`） |
 | 统计口径 | 成功率用不同集合计算；无 `asOf`、`terminalCount`；比较值可能为 Infinity；桶仅有 `label`；渠道占比为裸数组 | 按 5.1 集合计算；所有报表顶层 `asOf`；`channel-share` 为 `{ asOf, items }`；比较值可为 null；桶使用 `key` |
 | 测试覆盖 | 未覆盖未知资格、未知枚举、空金额、外部收款展示 | 补充对应 Mock 数据与展示 |
 | 支付状态 | 无 `coreStatus`，不处理 `PART_REFUNDED/REFUNDED` | 按第 2 节映射 |
