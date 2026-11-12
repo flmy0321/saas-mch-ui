@@ -2,14 +2,16 @@
 import { computed } from 'vue'
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
 import Select from './Select.vue'
-import { formatNumber } from '@/utils/format'
+import { formatCount, navigablePages, type CountInput } from '@/utils/count'
 import { cn } from '@/utils/cn'
 
-const props = withDefaults(defineProps<{ total: number; pageSizes?: number[] }>(), { pageSizes: () => [10, 20, 50, 100] })
+const props = withDefaults(defineProps<{ total: CountInput; pageSizes?: number[] }>(), { pageSizes: () => [10, 20, 50, 100] })
 const page = defineModel<number>('page', { required: true })
 const pageSize = defineModel<number>('pageSize', { required: true })
 
-const pageCount = computed(() => Math.max(1, Math.ceil(props.total / pageSize.value)))
+/** 页数以 BigInt 精确计算；超过协议页码上限时仅可导航到上限页，total 照常完整展示 */
+const nav = computed(() => navigablePages(props.total, pageSize.value))
+const pageCount = computed(() => nav.value.pages)
 
 const pages = computed<(number | '…')[]>(() => {
   const n = pageCount.value
@@ -40,7 +42,8 @@ const btn =
 <template>
   <nav class="flex flex-wrap items-center justify-between gap-3 px-1 text-[13px] text-muted-foreground" aria-label="分页">
     <p>
-      共 <span class="font-medium text-foreground tabular">{{ formatNumber(total) }}</span> 条
+      共 <span class="font-medium text-foreground tabular">{{ formatCount(total) }}</span> 条
+      <span v-if="nav.truncated" class="ml-1">（仅可翻至第 {{ formatCount(pageCount) }} 页，请缩小筛选范围）</span>
     </p>
     <div class="flex items-center gap-3">
       <div class="hidden items-center gap-2 sm:flex">

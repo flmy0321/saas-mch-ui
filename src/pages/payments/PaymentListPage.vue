@@ -21,7 +21,8 @@ import { buildPaymentColumns, PAYMENT_COLUMN_LABELS, type PaymentColumnId } from
 import { api } from '@/services/api'
 import { CHANNEL, METHOD, PAYMENT_STATUS, toOptions } from '@/utils/dictionaries'
 import { formatNumber } from '@/utils/format'
-import type { Payment, PaymentChannel, PaymentMethod, PaymentQuery, PaymentStatus } from '@/types'
+import { formatCount, isZeroCount } from '@/utils/count'
+import type { PaymentListItem, PaymentChannel, PaymentMethod, PaymentQuery, PaymentStatus } from '@/types'
 
 const router = useRouter()
 
@@ -68,7 +69,7 @@ const query = computed<PaymentQuery>(() => {
 
 const list = useAsync(() => api.payments.list(query.value), { watch: query })
 
-const columns = buildPaymentColumns({ sortable: true })
+const columns = buildPaymentColumns<PaymentListItem>({ sortable: true })
 const columnMeta = (Object.keys(PAYMENT_COLUMN_LABELS) as PaymentColumnId[]).map((id) => ({
   id,
   label: PAYMENT_COLUMN_LABELS[id],
@@ -99,7 +100,7 @@ async function exportCsv() {
   <div class="flex flex-col gap-5">
     <PageHeader title="支付订单" description="查询商户全部门店的支付订单，支持按订单号、门店、渠道、状态及时间范围筛选。">
       <template #actions>
-        <Button size="sm" :loading="exporting" :disabled="!list.data.value?.total" @click="exportCsv">
+        <Button size="sm" :loading="exporting" :disabled="!list.data.value || isZeroCount(list.data.value.total)" @click="exportCsv">
           <Download aria-hidden="true" />导出 CSV
         </Button>
       </template>
@@ -137,7 +138,7 @@ async function exportCsv() {
 
       <div class="flex items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
         <p class="text-[13px] text-muted-foreground" aria-live="polite">
-          共 <span class="font-medium text-foreground tabular">{{ formatNumber(list.data.value?.total ?? 0) }}</span> 笔订单
+          共 <span class="font-medium text-foreground tabular">{{ formatCount(list.data.value?.total ?? '0') }}</span> 笔订单
         </p>
         <ColumnSettings v-model="visibility" :columns="columnMeta" />
       </div>
@@ -149,11 +150,11 @@ async function exportCsv() {
         :loading="list.loading.value"
         :error="list.error.value"
         :column-visibility="visibility"
-        :row-key="(r: Payment) => r.id"
+        :row-key="(r: PaymentListItem) => r.id"
         clickable
         empty-title="没有符合条件的订单"
         empty-description="尝试调整筛选条件，或重置后重新查询。"
-        @row-click="(r: Payment) => router.push(`/payments/${r.id}`)"
+        @row-click="(r: PaymentListItem) => router.push(`/payments/${r.id}`)"
         @retry="list.reload()"
       >
         <template #empty-actions>
@@ -162,7 +163,7 @@ async function exportCsv() {
       </DataTable>
 
       <div class="border-t border-border px-4 py-3 sm:px-5">
-        <Pagination v-model:page="page" v-model:page-size="pageSize" :total="list.data.value?.total ?? 0" />
+        <Pagination v-model:page="page" v-model:page-size="pageSize" :total="list.data.value?.total ?? '0'" />
       </div>
     </Card>
   </div>

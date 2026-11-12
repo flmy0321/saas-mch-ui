@@ -1,6 +1,8 @@
 import type { MerchantApi } from '@/services/api/types'
 import { ApiError } from '@/services/api/types'
-import type { AuthTokens, Captcha, LoginResult, MerchantSelection } from '@/types'
+import type { AuthTokens, Captcha, LoginResult, MerchantSelection, PaymentListItem, PaymentListPage } from '@/types'
+import { PAYMENT_LIST_VIEW_VERSION } from '@/types'
+import { isExactCount, MAX_PAGE } from '@/utils/count'
 import { request, seg } from './client'
 
 const PNG_DATA_URL = /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/
@@ -33,6 +35,43 @@ function parseSelection(v: unknown): MerchantSelection {
     throw malformed('商户选择')
   }
   return { selectionToken: s.selectionToken, expiresAt: s.expiresAt, tenantIds: [...s.tenantIds] }
+}
+
+const LIST_ITEM_KEYS: readonly (keyof PaymentListItem)[] = [
+  'id', 'source', 'merchantOrderNo', 'storeId', 'storeName', 'subject', 'amount', 'currency', 'channel', 'method',
+  'createdAt', 'paidAt', 'expireAt', 'refundedAmount', 'refundingAmount', 'refundPrincipalLimit',
+  'availableRefundAmount', 'refundEligibility', 'collectionVerification', 'status', 'coreStatus', 'refundAggregate',
+]
+const isIntIn = (v: unknown, min: number, max: number): v is number =>
+  typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max
+
+/**
+ * 支付列表精简视图（协议 4.1a）：校验版本、精确 total 与必需键（含必需 nullable）；
+ * 不补默认值、不把 total 转 Number。字段级格式以服务端 Schema 为准。
+ */
+function parsePaymentListPage(v: unknown): PaymentListPage {
+  const p = v as Partial<PaymentListPage> | null
+  if (
+    !p ||
+    p.viewVersion !== PAYMENT_LIST_VIEW_VERSION ||
+    !isExactCount(p.total) ||
+    !isIntIn(p.page, 1, MAX_PAGE) ||
+    !isIntIn(p.pageSize, 1, 100) ||
+    !isNonEmptyString(p.asOf) ||
+    !Array.isArray(p.items) ||
+    p.items.length > 100
+  ) {
+    throw malformed('支付列表')
+  }
+  for (const item of p.items) {
+    const o = item as unknown as Record<string, unknown> | null
+    if (!o || typeof o !== 'object') throw malformed('支付列表项')
+    const keys = Object.keys(o)
+    if (keys.length !== LIST_ITEM_KEYS.length || !LIST_ITEM_KEYS.every((k) => k in o)) throw malformed('支付列表项')
+    if (o.source === 'API' && (typeof o.merchantOrderNo !== 'string' || typeof o.subject !== 'string')) throw malformed('支付列表项')
+    if (o.source === 'EXTERNAL' && o.merchantOrderNo !== null) throw malformed('支付列表项')
+  }
+  return p as PaymentListPage
 }
 
 /**
@@ -70,7 +109,7 @@ export const httpApi: MerchantApi = {
     recentPayments: (limit) => request('/dashboard/recent-payments', { query: { limit } }),
   },
   payments: {
-    list: (query) => request('/payments', { query: { ...query } }),
+    list: async (query) => parsePaymentListPage(await request<unknown>('/payments', { query: { ...query } })),
     get: (id) => request(`/payments/${seg(id)}`),
     refundable: (id) => request(`/payments/${seg(id)}/refundable`),
     exportCsv: (query) => request('/payments/export', { query: { ...query } }),

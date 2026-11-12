@@ -57,7 +57,7 @@ const greeting = computed(() => {
 })
 
 const today = toDateInput(new Date())
-const columns = buildPaymentColumns({ include: ['id', 'storeName', 'amount', 'channel', 'status', 'createdAt'] })
+const columns = buildPaymentColumns<Payment>({ include: ['id', 'storeName', 'amount', 'channel', 'status', 'createdAt'] })
 
 function reloadAll() {
   summary.reload()

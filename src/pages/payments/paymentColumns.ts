@@ -7,7 +7,27 @@ import PaymentStatusBadge from '@/components/business/PaymentStatusBadge.vue'
 import RefundAggregateBadge from '@/components/business/RefundAggregateBadge.vue'
 import { methodLabel } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
-import type { Payment } from '@/types'
+import type { PaymentListItem } from '@/types'
+
+/**
+ * 表格列只依赖列表精简视图与详情 Payment 共有的字段；
+ * 支付列表、门店详情（PaymentListItem）与工作台（Payment）均可复用。
+ */
+export type PaymentColumnRow = Pick<
+  PaymentListItem,
+  | 'id'
+  | 'merchantOrderNo'
+  | 'storeName'
+  | 'amount'
+  | 'channel'
+  | 'method'
+  | 'status'
+  | 'createdAt'
+  | 'paidAt'
+  | 'refundAggregate'
+  | 'refundedAmount'
+  | 'refundingAmount'
+>
 
 export type PaymentColumnId =
   | 'id'
@@ -35,9 +55,11 @@ export const PAYMENT_COLUMN_LABELS: Record<PaymentColumnId, string> = {
 const muted = (text: string) => h('span', { class: 'text-muted-foreground tabular whitespace-nowrap' }, text)
 
 /** 支付订单表格列定义（列表页、门店详情、工作台共用，保证一致的展示方式） */
-export function buildPaymentColumns(opts: { sortable?: boolean; include?: PaymentColumnId[] } = {}): ColumnDef<Payment>[] {
+export function buildPaymentColumns<T extends PaymentColumnRow>(
+  opts: { sortable?: boolean; include?: PaymentColumnId[] } = {},
+): ColumnDef<T>[] {
   const sortable = opts.sortable ?? false
-  const all: ColumnDef<Payment>[] = [
+  const all: ColumnDef<T>[] = [
     {
       id: 'id',
       header: PAYMENT_COLUMN_LABELS.id,

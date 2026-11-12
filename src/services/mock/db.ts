@@ -542,7 +542,8 @@ export function recomputePayment(p: PaymentRow) {
     p.refundPrincipalLimit = null
     p.availableRefundAmount = null
     p.refundEligibility = 'NOT_COLLECTED'
-    p.collectionVerification = p.status === 'FAILED' || p.status === 'CLOSED' ? null : 'PENDING'
+    // 核心 collectionVerification 为必需枚举，未入账订单同样是 PENDING，不用 null 表示
+    p.collectionVerification = 'PENDING'
     return
   }
   const occupied = related.filter((r) => COUNTED_REFUND.includes(r.status)).reduce((s, r) => s + r.amount, 0n)

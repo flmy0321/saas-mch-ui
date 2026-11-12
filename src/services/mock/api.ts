@@ -7,6 +7,8 @@ import type {
   Granularity,
   Paginated,
   Payment,
+  PaymentListItem,
+  PaymentListPage,
   PaymentQuery,
   Refund,
   RefundQuery,
@@ -15,6 +17,7 @@ import type {
   Store,
   TrendPoint,
 } from '@/types'
+import { PAYMENT_LIST_VIEW_VERSION } from '@/types'
 import { ApiError, type ApiErrorInit, type MerchantApi } from '@/services/api/types'
 import { fenToAmount, isAmountInput, toFen } from '@/utils/money'
 import { delay, getMockRefundFault } from './control'
@@ -74,6 +77,40 @@ function paymentDto(p: PaymentRow): Payment {
     refundingAmount: fenToAmount(p.refundingAmount),
     refundPrincipalLimit: amt(p.refundPrincipalLimit),
     availableRefundAmount: amt(p.availableRefundAmount),
+  }
+}
+
+/** Mock 数据不变量：列表必需字段缺失时直接报错，不以默认值伪装 */
+function required<T>(v: T | null, field: string, id: string): T {
+  if (v === null) fail(`Mock 数据缺少列表必需字段 ${field}（${id}）`, 'MOCK_INVARIANT', 500)
+  return v
+}
+
+/** 列表精简视图：显式逐字段投影，详情专属字段（paidAmount 等）不进入列表 */
+function paymentListItemDto(p: PaymentRow): PaymentListItem {
+  return {
+    id: p.id,
+    source: p.source,
+    merchantOrderNo: p.merchantOrderNo,
+    storeId: p.storeId,
+    storeName: p.storeName,
+    subject: p.subject,
+    amount: fenToAmount(p.amount),
+    currency: 'CNY',
+    channel: p.channel,
+    method: p.method,
+    createdAt: p.createdAt,
+    paidAt: p.paidAt,
+    expireAt: p.expireAt,
+    refundedAmount: fenToAmount(p.refundedAmount),
+    refundingAmount: fenToAmount(p.refundingAmount),
+    refundPrincipalLimit: amt(p.refundPrincipalLimit),
+    availableRefundAmount: amt(p.availableRefundAmount),
+    refundEligibility: required(p.refundEligibility, 'refundEligibility', p.id),
+    collectionVerification: required(p.collectionVerification, 'collectionVerification', p.id),
+    status: p.status,
+    coreStatus: p.coreStatus,
+    refundAggregate: p.refundAggregate,
   }
 }
 
@@ -447,7 +484,15 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
     list: (q) =>
       delay(() => {
         const page = paginate(sortRows(filterPayments(q), q.sortBy, q.sortOrder), q.page, q.pageSize)
-        return { ...page, items: page.items.map(paymentDto) }
+        const view: PaymentListPage = {
+          viewVersion: PAYMENT_LIST_VIEW_VERSION,
+          items: page.items.map(paymentListItemDto),
+          total: String(page.total),
+          page: page.page,
+          pageSize: page.pageSize,
+          asOf: asOf(),
+        }
+        return view
       }),
     get: (id) => delay(() => paymentDto(findPayment(id))),
     refundable: (id) => delay(() => refundableInfo(findPayment(id))),

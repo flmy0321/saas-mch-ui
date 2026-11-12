@@ -21,7 +21,7 @@ import { buildPaymentColumns } from '@/pages/payments/paymentColumns'
 import { api } from '@/services/api'
 import { STORE_STATUS } from '@/utils/dictionaries'
 import { formatDateTime, formatMoney, formatNumber, formatPercent } from '@/utils/format'
-import type { Payment } from '@/types'
+import type { PaymentListItem } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -52,7 +52,7 @@ const items = computed(() =>
     : [],
 )
 
-const columns = buildPaymentColumns({ include: ['id', 'merchantOrderNo', 'amount', 'channel', 'status', 'createdAt'] })
+const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'merchantOrderNo', 'amount', 'channel', 'status', 'createdAt'] })
 </script>
 
 <template>
@@ -120,10 +120,10 @@ const columns = buildPaymentColumns({ include: ['id', 'merchantOrderNo', 'amount
           :loading="recent.loading.value"
           :error="recent.error.value"
           :skeleton-rows="5"
-          :row-key="(r: Payment) => r.id"
+          :row-key="(r: PaymentListItem) => r.id"
           clickable
           empty-title="该门店暂无订单"
-          @row-click="(r: Payment) => router.push(`/payments/${r.id}`)"
+          @row-click="(r: PaymentListItem) => router.push(`/payments/${r.id}`)"
           @retry="recent.reload()"
         />
       </Card>

@@ -91,6 +91,54 @@ export interface Payment {
   collectionVerification: CollectionVerification | null
 }
 
+/**
+ * 支付列表精简视图（协议 4.1a，portal-payment-list-view/0.1-draft）。
+ * 与详情 Payment 独立：不含 paidAmount / submittedAt / closedAt / failedAt / failReason / refundCount，
+ * 这些字段在核心列表投影交付前不出现在列表中，也不以 null / 0 / '' 占位。
+ */
+export interface PaymentListItem {
+  id: string
+  source: PaymentSource
+  /** source=API 必为字符串；EXTERNAL 必为 null */
+  merchantOrderNo: string | null
+  /** 核心 storeCode（sto_ 业务编号） */
+  storeId: string | null
+  storeName: string | null
+  /** source=API 必为字符串；EXTERNAL 可为 null（合法未知事实，页面占位仅用于渲染） */
+  subject: string | null
+  amount: AmountDecimal
+  currency: 'CNY'
+  channel: PaymentChannel
+  method: PaymentMethod
+  createdAt: string
+  paidAt: string | null
+  expireAt: string | null
+  refundedAmount: AmountDecimal
+  refundingAmount: AmountDecimal
+  refundPrincipalLimit: AmountDecimal | null
+  availableRefundAmount: AmountDecimal | null
+  refundEligibility: RefundEligibility
+  collectionVerification: CollectionVerification
+  /** 网页视图状态：PART_REFUNDED / REFUNDED → SUCCESS */
+  status: PaymentStatus
+  coreStatus: string
+  refundAggregate: RefundAggregateStatus
+}
+
+export const PAYMENT_LIST_VIEW_VERSION = 'portal-payment-list-view/0.1-draft'
+
+/** 精确十进制计数字符串（uint64 语义，^(0|[1-9][0-9]{0,19})$），不得先转 Number */
+export type ExactCount = string
+
+export interface PaymentListPage {
+  viewVersion: typeof PAYMENT_LIST_VIEW_VERSION
+  items: PaymentListItem[]
+  total: ExactCount
+  page: number
+  pageSize: number
+  asOf: string
+}
+
 export interface RefundProgressEvent {
   status: RefundStatus
   at: string

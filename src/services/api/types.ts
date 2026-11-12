@@ -19,6 +19,7 @@ import type {
   MerchantApp,
   Notification,
   Paginated,
+  PaymentListPage,
   Payment,
   PaymentQuery,
   Refund,
@@ -61,7 +62,8 @@ export interface MerchantApi {
     recentPayments(limit: number): Promise<Payment[]>
   }
   payments: {
-    list(query: PaymentQuery): Promise<Paginated<Payment>>
+    /** 精简列表视图（协议 4.1a），不复用详情 Payment */
+    list(query: PaymentQuery): Promise<PaymentListPage>
     get(id: string): Promise<Payment>
     refundable(id: string): Promise<RefundableInfo>
     exportCsv(query: PaymentQuery): Promise<{ filename: string; rows: number; content: string }>

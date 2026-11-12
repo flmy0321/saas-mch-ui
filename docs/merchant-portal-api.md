@@ -2,6 +2,8 @@
 
 > **文档状态：候选草案，可作为前端改造方向；尚不是后端联调验收依据，也不是内部服务契约冻结。** 已根据《UI 协议核查结果》（2026-11-03）、《v1.1 复核与修订意见》（2026-11-04）、《v1.2 复核结果及最后补充清单》（2026-11-04）与《v1.3 复核结果》（2026-11-04）修订。标记为 **【待核对】** 的条目依赖尚未设计的**支付领域内部能力契约**或核心锁定 Schema / 通知契约，在契约补齐前不得自行定义实现。**本版只修订文档；前端类型、Mock 与页面仍为旧版实现（`MerchantApi.auth` 注释除外），差异见第 8 节。**
 
+> **036 修订（2026-11-11）**：评审通过支付列表精简视图提案（含两项调整），`GET /payments` 改为返回 3.1a `PaymentListPage`，仅影响支付列表；详情及其他接口不变。这是前端/协议侧草案，后台投影与端到端联调尚未完成。
+
 本文档描述商户后台前端（Portal）所依赖的网页接口。它与 `src/services/api/types.ts`、`src/types/index.ts` 的对应关系**只用于保证 UI 草案内部一致**，不能凌驾于已锁定的跨系统规则；两者与核心规则冲突时，以核心规则为准，并同步修改本文档与前端代码。
 
 > **架构限制（已确认）：禁止开放 API 用于门户；允许独立内部接口。** 调用链为：浏览器 → merchant-platform 独立网页接口（本文）→ 另行设计的支付领域内部接口 → 核心资金领域。
@@ -145,6 +147,8 @@
 
 `page` 超出最后一页时返回最后一页的数据，并在 `page` 中回写实际页码。
 
+> **例外：`GET /payments` 使用 `PaymentListPage`（见 3.1a），不使用 `Paginated<T>`。** 其 `total` 为精确十进制字符串 `ExactCount`，`page` 上限 1000000。其他列表暂保持 `Paginated<T>` 的 int `total`，未经单独评审不得顺带改动。
+
 ---
 
 ## 2. 枚举字典
@@ -227,6 +231,60 @@
   5. 输入金额符合 1.1 输入格式、大于 0、且不超出当前提示的可退金额（十进制比较）。
 - 以上为防误操作的前端约束，**服务端必须独立授权并以核心原子校验为准**；前端校验通过不代表可退。
 - `refundedAmount` / `refundingAmount` 只用于展示，**不得用于判断能否退款**。
+
+### 3.1a PaymentListItem / PaymentListPage 支付列表精简视图（036，`portal-payment-list-view/0.1-draft`）
+
+> **状态：前端已按此草案接入类型、Mock 与 HTTP 解析；后台列表投影、服务端 Schema 与端到端联调均未完成。** 本节只约束 `GET /payments`。详情 `GET /payments/{id}`、工作台 `recent-payments`、导出及其他接口**不随本节改动**，仍返回 3.1 `Payment`。
+
+**设计原则**：列表使用独立 DTO，不复用 3.1 详情对象。核心列表投影当前无法权威提供的 `paidAmount`、`submittedAt`、`closedAt`、`failedAt`、`failReason`、`refundCount` **不出现在列表中**，不得以 `0`、`""` 或统一 `null` 占位冒充“已交付”。需要这些字段时进入详情页获取。
+
+`PaymentListItem`：恰好以下 22 个键，全部必需（nullable 字段也必须出现，值为 `null`）；不得增减或省略键。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 平台支付订单号 |
+| `source` | `API` \| `EXTERNAL` | 订单来源 |
+| `merchantOrderNo` | string \| null | `API` 必为字符串；`EXTERNAL` 必为 `null` |
+| `storeId` | string \| null | 核心 `storeCode`（`sto_` 业务编号），不是内部 ID |
+| `storeName` | string \| null | 无合法关联来源时为 `null` |
+| `subject` | string \| null | `API` 必为字符串；**`EXTERNAL` 可为 `null`**，表示核心无此事实。页面可渲染“—”等占位，占位只用于显示，**不回写 DTO、不进入导出/搜索/筛选** |
+| `amount` | AmountDecimal | 订单金额，沿用 1.1 金额字符串语义 |
+| `currency` | `CNY` | 本版固定 |
+| `channel` / `method` | string | 核心取值，未知值展示原值 |
+| `createdAt` | string | 创建时间 |
+| `paidAt` | string \| null | 核心成功时间；未成功为 `null`（这是真实事实，不是占位） |
+| `expireAt` | string \| null | 支付超时时间 |
+| `refundedAmount` / `refundingAmount` | AmountDecimal | 仅展示，不得用于判断能否退款 |
+| `refundPrincipalLimit` / `availableRefundAmount` | AmountDecimal \| null | 未知为 `null`，前端按不可退处理 |
+| `refundEligibility` | string | 核心必需枚举（3.1 语义，开放字符串）；列表中不为 `null` |
+| `collectionVerification` | string | 核心必需枚举（`PENDING`/`VERIFIED`/`REVIEW_REQUIRED`，开放字符串）；列表中不为 `null`，未入账订单为 `PENDING` |
+| `status` | PaymentStatus | 网页视图状态，按第 2 节显式映射：`PART_REFUNDED`/`REFUNDED` → `SUCCESS` |
+| `coreStatus` | string | 核心原始状态，原样保留 |
+| `refundAggregate` | RefundAggregateStatus | 按第 2 节由核心状态映射：`PART_REFUNDED` → `PARTIAL`，`REFUNDED` → `FULL`，其余 → `NONE`；不由 Portal 依退款明细计算 |
+
+`PaymentListPage`：
+
+```json
+{
+  "viewVersion": "portal-payment-list-view/0.1-draft",
+  "items": [],
+  "total": "18446744073709551615",
+  "page": 1,
+  "pageSize": 20,
+  "asOf": "2026-11-11T08:00:00.000Z"
+}
+```
+
+| 字段 | 规则 |
+| --- | --- |
+| `viewVersion` | 固定字面量；前端不认识的版本按畸形响应处理，不猜测字段 |
+| `total` | `ExactCount`：`^(0|[1-9][0-9]{0,19})$` 且 ≤ `18446744073709551615`（uint64）。**禁止 JSON number，禁止前导零、正负号、小数、科学计数** |
+| `page` | int，1–1000000；越界回写实际页码（同 1.4） |
+| `pageSize` | int，1–100 |
+| `items` | 长度 ≤ `pageSize` |
+| `asOf` | 查询快照时间 |
+
+**页数计算**：前端以 `BigInt` 计算 `ceil(total / pageSize)`，全程不经 `Number`。可导航页数取 `min(精确页数, 1000000)`；超出时 `total` 照常完整显示，并提示用户缩小筛选范围。`total` 的千分位格式化直接作用于十进制字符串。
 
 ### 3.2 Refund 退款
 
@@ -516,7 +574,7 @@ HTTP 模式实现位于 `src/services/http/`（`client.ts` 统一 fetch，`api.t
 
 ### 5.2 支付订单 Payments
 
-#### `GET /payments` → `Paginated<Payment>`
+#### `GET /payments` → `PaymentListPage`（3.1a 精简视图，非 `Paginated<Payment>`）
 
 | 参数 | 说明 |
 | --- | --- |
@@ -856,6 +914,7 @@ HTTP 模式实现位于 `src/services/http/`（`client.ts` 统一 fetch，`api.t
 | `MerchantApi` 方法 | 无精确查询方法 | 新增 `refunds.findByMerchantRefundNo(paymentId, merchantRefundNo)` |
 | 错误语义 | **已完成**：`ApiError` 已有 `httpStatus`、`outcome`、`requestId`；`withAuth` 已按 HTTP 401 + `UNAUTHENTICATED` 判定 | （已达成）`ApiError` 增加 `httpStatus`、`outcome`、`requestId`；`withAuth` 改为 `httpStatus === 401 && code === "UNAUTHENTICATED"`；资金写按 1.3 分类优先级判定（合法匹配的 2xx 为 `LOCATED`，错误响应缺失/未知 outcome 为 `UNKNOWN`） |
 | 统计口径 | 成功率用不同集合计算；无 `asOf`、`terminalCount`；比较值可能为 Infinity；桶仅有 `label`；渠道占比为裸数组 | 按 5.1 集合计算；所有报表顶层 `asOf`；`channel-share` 为 `{ asOf, items }`；比较值可为 null；桶使用 `key` |
+| 支付列表视图（036） | **前端已完成**：`payments.list` 返回 `PaymentListPage`；列表项为独立 `PaymentListItem`；`total` 为字符串，分页以 BigInt 计算；HTTP 模式校验 `viewVersion`、`total` 格式与 22 个键，不符即报畸形响应，不回退 Mock | 后台列表投影与服务端 Schema 待实现；尚无真实后台 + 浏览器联合验收 |
 | 测试覆盖 | 未覆盖未知资格、未知枚举、空金额、外部收款展示 | 补充对应 Mock 数据与展示 |
 | 支付状态 | 无 `coreStatus`，不处理 `PART_REFUNDED/REFUNDED` | 按第 2 节映射 |
 | 渠道 / 方式 | 仅 3 个渠道，方式为 `NATIVE/JSAPI/APP/MICROPAY` 等 | 使用核心取值，未知值展示原值 |
