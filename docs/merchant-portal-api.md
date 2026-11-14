@@ -444,7 +444,11 @@
 
 ### 3.8 剩余只读接口精简视图（038 提案，**待后台复核，未批准**）
 
-> **状态：仅为候选提案，不是已批准协议。** 复核通过前，3.2、3.3、3.4、3.7 与 5.3、5.5、5.6、5.8 的现行定义不变，前端不切换。后台目前只完成这些接口的离线消费者，**没有真实环境调用，也没有端到端验收**。036 列表与 037 详情的结论都不自动套用到本节。**支付详情**的同类缺口（`paidAmount`、`submittedAt`、`closedAt`、`failedAt`、`failReason`、`refundCount` 无来源，`EXTERNAL` 的 `subject` 可为 `null`）已在 3.1b（037，`portal-payment-detail-view/0.1-draft`）单独提出，本节不重复定义。
+> **状态：仍为 draft，不是已批准协议。** 后台第一轮复核已认可以下方向：精简字段、nullable 规则、状态原值展示、App 分页、精确查询统一 404。本轮补充了包装格式、App 分页参数、`finishedAt` 取值规则和来源结论（见 3.8.0a、3.8.3、3.8.4、3.8.6），需要后台再次确认。确认前 3.2、3.3、3.4、3.7 与 5.3、5.5、5.6、5.8 的现行定义不变，前端不切换，**本轮只改文档**。
+>
+> 后台目前只完成这些接口的离线消费者。对应的 Core 端点**尚待交付和验证**，**没有真实环境调用，也没有端到端验收**。
+>
+> **与 037 的关系**：036 列表与 037 详情的结论都不自动套用到本节；038 的确认**也不代表 037 获得批准**。支付详情的同类缺口（`paidAmount`、`submittedAt`、`closedAt`、`failedAt`、`failReason`、`refundCount` 无来源，`EXTERNAL` 的 `subject` 可为 `null`）只在 3.1b（037，`portal-payment-detail-view/0.1-draft`）中定义，需要独立确认。
 
 #### 3.8.0 共同规则
 
@@ -455,17 +459,55 @@
 5. **金额**：沿用 1.1 `AmountDecimal` 字符串语义；未知本金与额度保持 `null`。退款资格查询不代表获得退款写权限。
 6. **非必需字段的处理**：页面并不需要的字段直接删除；确实需要的，下表写明用途，由后台协调权威来源，来源确定后以各视图的 `0.2-draft` 单独评审加入。
 
-响应包装统一为：
+#### 3.8.0a 响应包装（单项与列表）
+
+所有 038 视图的响应体都是**顶层对象**，HTTP 200 直接返回，外层不再套 `data` 等字段。`viewVersion` 和 `asOf` **只出现在顶层**，不出现在单项对象或 `items` 的元素里。顶层键集合同样严格，多键、少键都按畸形响应处理。
+
+**单项**：恰好 3 个键。
 
 ```json
-{ "viewVersion": "<见各视图>", "<资源名>": { "...": "..." }, "asOf": "2026-11-14T08:00:00.000Z" }
+{
+  "viewVersion": "portal-store-view/0.1-draft",
+  "store": { "...": "StoreView，键集合见 3.8.2" },
+  "asOf": "2026-11-14T08:00:00.000Z"
+}
 ```
 
-列表为 `{ "viewVersion", "items", "total", "page", "pageSize", "asOf" }`，其中 `total` 为 int，其余同 1.4。
+**列表**：恰好 6 个键。不使用 1.4 的裸 `Paginated<T>`，但 `total`/`page`/`pageSize` 的类型与 1.4 一致。
+
+```json
+{
+  "viewVersion": "portal-store-view/0.1-draft",
+  "items": [],
+  "total": 0,
+  "page": 1,
+  "pageSize": 20,
+  "asOf": "2026-11-14T08:00:00.000Z"
+}
+```
+
+| 顶层键 | 类型 | 规则 |
+| --- | --- | --- |
+| `viewVersion` | string | 固定字面量，取值见下表；单项与列表使用**同一个**版本号 |
+| 数据键（单项） | object | 键名见下表；不可为 `null`。找不到资源时返回 404，不返回 `{ "store": null }` |
+| `items`（列表） | array | 元素键集合与单项对象相同；长度 ≤ `pageSize`；空结果为 `[]` |
+| `total`（列表） | int | 非负整数（JSON number）。本轮**不**改为 `ExactCount` 字符串，见 3.8.0 第 4 条 |
+| `page`（列表） | int | ≥ 1，回写实际页码 |
+| `pageSize`（列表） | int | 1–100，回写实际生效值 |
+| `asOf` | string | ISO 8601 UTC 带毫秒，如 `2026-11-14T08:00:00.000Z`。表示**本次查询的快照时间**，由服务端生成；单项和列表都**必须**出现，不可为 `null` |
+
+| 接口 | `viewVersion` | 单项数据键 |
+| --- | --- | --- |
+| `GET /account/merchant` | `portal-merchant-profile-view/0.1-draft` | `merchant`（只有单项，没有列表） |
+| `GET /stores`、`GET /stores/{id}` | `portal-store-view/0.1-draft` | `store` |
+| `GET /apps`、`GET /apps/{appId}` | `portal-app-view/0.1-draft` | `app` |
+| `GET /refunds`、`GET /refunds/{id}`、`GET /refunds/by-merchant-refund-no/{merchantRefundNo}?paymentId=` | `portal-refund-view/0.1-draft` | `refund` |
+
+错误响应仍按 1.3 的统一错误格式返回，不带 `viewVersion`/`asOf`。
 
 #### 3.8.1 商户资料 `MerchantProfileView`（`portal-merchant-profile-view/0.1-draft`）
 
-适用于 `GET /account/merchant`，包装键为 `merchant`。
+适用于 `GET /account/merchant`（单项包装，数据键 `merchant`），包装格式见 3.8.0a。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -480,11 +522,13 @@
 | --- | --- | --- |
 | `shortName` | 否 | 只用于头像首字，改用 `name` 首字 |
 | `industry`、`address`、`contactEmail`、`contactPhone` | 否 | 只是资料展示，直接删除 |
-| `legalName`、`creditCode` | **待产品确认** | 用途：商户核对签约主体与资质。若产品认为必需，由后台协调权威来源后以 0.2 加入；在此之前不展示 |
+| `legalName`、`creditCode` | **不进入 0.1** | 原用途是让商户核对签约主体与资质。0.1 不包含，也不展示。以后需要时由后台协调权威来源，以 `0.2-draft` 单独评审加入 |
+
+**来源**：后台已确认 `name`、`createdAt` 在核心契约中有对应来源，保留。
 
 #### 3.8.2 门店 `StoreView`（`portal-store-view/0.1-draft`）
 
-适用于 `GET /stores`（列表，`Paginated`，int `total`）与 `GET /stores/{id}`（包装键为 `store`）。
+适用于 `GET /stores`（列表包装，int `total`）与 `GET /stores/{id}`（单项包装，数据键 `store`），包装格式见 3.8.0a。分页参数沿用 1.4，本轮不改。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -503,7 +547,7 @@
 
 #### 3.8.3 App `AppView`（`portal-app-view/0.1-draft`）
 
-适用于 `GET /apps` 与 `GET /apps/{appId}`（包装键为 `app`）。
+适用于 `GET /apps`（列表包装）与 `GET /apps/{appId}`（单项包装，数据键 `app`），包装格式见 3.8.0a。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -514,28 +558,55 @@
 | `status` | string | 核心原值：`ACTIVE` 已启用 · `DISABLED` 已停用 · `REVOKED` 已吊销；其他值为“未知(原值)” |
 | `createdAt` | string | |
 
-**删除**：`description`（非必需）、`permissions`（**待产品确认**。用途：商户排查开放接口调用被拒的原因。若产品认为必需，由后台协调权威来源后以 0.2 加入；在此之前不展示权限面板，**不以空数组表示“未开通”**）。
+**删除**：`description`（非必需）、`permissions`（**不进入 0.1**。原用途是帮商户排查开放接口调用被拒的原因。0.1 不展示权限面板，**不以空数组表示“未开通”**；以后需要时以 `0.2-draft` 单独评审加入）。
 
-**列表形态：选择分页视图。** `GET /apps` 改为 `Paginated<AppView>`，参数 `page`、`pageSize`（1–100），`sortBy=createdAt`（默认 `desc`），`total` 为 int。不要求后台提供“完整数组”聚合能力。
+**列表形态：选择分页视图。** `GET /apps` 返回 3.8.0a 的列表包装，`total` 为 int。不要求后台提供“完整数组”聚合能力。
+
+| 参数 | 类型 | 默认 | 规则 |
+| --- | --- | --- | --- |
+| `page` | int | `1` | ≥ 1。非整数或 < 1 返回 `400 VALIDATION` |
+| `pageSize` | int | `20` | 上限 `100`。非整数或 < 1 返回 `400 VALIDATION`；> 100 截断为 100，并在响应 `pageSize` 中回写 `100` |
+| `sortBy` | string | `createdAt` | 只允许 `createdAt`，其他值返回 `400 VALIDATION` |
+| `sortOrder` | `asc` \| `desc` | `desc` | 其他值返回 `400 VALIDATION` |
+
+- **排序稳定**：`createdAt` 相同时按 `id` 同方向排序，避免翻页时重复或遗漏。
+- **超尾页**：`total > 0` 且 `page` 超过最后一页（`ceil(total / pageSize)`）时，返回最后一页数据，并在 `page` 中回写实际页码（同 1.4）。
+- **空结果**：`total = 0` 时，无论请求的 `page` 是多少，都返回 `page = 1`、`items = []`。
+- **前端不推算**：页码和页大小一律以响应回写值为准；前端不把“当前页条数 < pageSize”当作已经到底，是否已加载完全部 App 只按 `已加载条数 ≥ total` 判断。
+- **翻页期间数据变化**：分页不承诺跨请求的快照一致。每次响应以自己的 `asOf` 和 `total` 为准；如果翻页时 `total` 变了，应用选择器以最新 `total` 更新“共 N 个”，不自己合并或去重推算总数。
 
 - App 列表页按分页展示。
 - 应用选择器（API 密钥、Webhook 配置、通知记录页共用）按页加载，显示“已加载 N / 共 total 个”，未加载完时提供“加载更多”；**不把第一页当作全部 App**。
 
 #### 3.8.4 退款 `RefundView`（`portal-refund-view/0.1-draft`）
 
-适用于 `GET /refunds`（列表，`Paginated`，int `total`）、`GET /refunds/{id}` 与 `GET /refunds/by-merchant-refund-no/{merchantRefundNo}?paymentId=`（包装键为 `refund`）。
+适用于 `GET /refunds`（列表包装，int `total`）、`GET /refunds/{id}` 与 `GET /refunds/by-merchant-refund-no/{merchantRefundNo}?paymentId=`（单项包装，数据键 `refund`），包装格式见 3.8.0a。列表分页参数沿用 1.4，本轮不改。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 平台退款单号 |
 | `merchantRefundNo` | string \| null | **可为 `null`**（如非经本门户创建的退款） |
 | `paymentId` | string | 原支付订单 |
-| `storeId` / `storeName` | string \| null | **待后台确认核心有来源**；若无来源，同样删除 |
+| `storeId` / `storeName` | string \| null | 核心契约中有对应来源（后台已确认）；没有关联门店时为 `null` |
 | `amount` | AmountDecimal | 退款金额 |
 | `status` | RefundStatus | 第 2 节取值；其他值为“未知(原值)” |
 | `reason` | string \| null | **可为 `null`**，表示核心无此值 |
 | `createdAt` | string | |
-| `finishedAt` | string \| null | 到达终态时间；**待后台确认核心有来源** |
+| `finishedAt` | string \| null | 终态时间，按下表**按状态取对应的核心时间字段**（后台已确认核心契约中有这些来源） |
+
+**`finishedAt` 取值规则**：
+
+| `status` | `finishedAt` |
+| --- | --- |
+| `SUCCESS` | 核心 `refundSuccessAt` |
+| `FAILED` | 核心 `failedAt` |
+| `CLOSED` | 核心 `closedAt` |
+| 其他（`CREATED`、`PROCESSING`、`SUSPENDED` 及未知值） | `null` |
+
+- 只取与当前状态对应的那一个字段，**不推算、不补时间**：不用 `createdAt`、查询时间或 `asOf` 代替，也不在多个时间字段之间互相兜底。
+- 状态为 `SUCCESS`/`FAILED`/`CLOSED`，但核心对应字段为空时，`finishedAt` 返回 `null`，前端显示“—”，不报错、不补值。
+- `SUSPENDED` 不是终态（仍占用退款额度），`finishedAt` 固定为 `null`。
+- 页面上的标签按状态区分显示：“退款成功时间” / “退款失败时间” / “关闭时间”，不笼统写“完成时间”，以免把失败或关闭误读为退款成功。
 
 **删除**：`merchantOrderNo`、`channel`、`updatedAt`、`failReason`、`progress`。
 
@@ -565,9 +636,21 @@
 | `AppListPage.vue` / `useAppPicker.ts` | 改为分页；选择器按页加载并显示已加载/总数 |
 | `AppDetailPage.vue` | 删除应用描述与接口权限面板；状态增加 `REVOKED` 与未知值 |
 | `RefundListPage.vue` / `refundColumns.ts` | `merchantRefundNo` 为 `null` 时显示“—” |
-| `RefundDetailPage.vue` | 删除进度时间线、最近更新、失败原因、退款渠道、原商户订单号；`reason` 为 `null` 显示“—”；可选从原支付订单读取并标注来源 |
+| `RefundDetailPage.vue` | 删除进度时间线、最近更新、失败原因、退款渠道、原商户订单号；`reason` 为 `null` 显示“—”；`finishedAt` 按状态显示为“退款成功时间 / 退款失败时间 / 关闭时间”，为 `null` 时显示“—”；可选从原支付订单读取并标注来源 |
 | `CreateRefundDialog.vue` | 精确查询 404 不再区分 `authoritative`，统一保持待确认 |
 | 开发者文档页 | 同步精确查询 404 语义 |
+
+#### 3.8.6 来源结论与范围（第二轮）
+
+| 项目 | 结论 |
+| --- | --- |
+| 商户 `name`、`createdAt` | 后台确认核心契约有对应来源，保留 |
+| 退款 `storeId`/`storeName` | 后台确认核心契约有对应来源，保留；无关联门店时为 `null` |
+| 退款终态时间 `refundSuccessAt`/`failedAt`/`closedAt` | 后台确认核心契约有对应来源，按 3.8.4 规则映射为 `finishedAt` |
+| `legalName`、`creditCode`、`permissions` | 不进入本次 0.1；以后需要时以 `0.2-draft` 单独评审 |
+| Core 对应端点 | **尚待交付和验证**。“契约中有来源”只表示字段定义存在，不代表接口已实现、已联调或已验收 |
+| 支付详情（037） | 独立评审，**不随 038 视为批准**；确认前 `GET /payments/{id}` 仍按 3.1 |
+| 前端代码 | 本轮不改；038 确认后按 3.8.5 实施 |
 
 **演进**：任一视图需要新增字段时，以该视图的 `0.2-draft` 单独评审，并写明权威来源与 `null` 的含义。不得在 0.1 中悄悄增加键。
 
