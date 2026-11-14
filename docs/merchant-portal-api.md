@@ -4,6 +4,8 @@
 
 > **036 修订（2026-11-11）**：评审通过支付列表精简视图提案（含两项调整），`GET /payments` 改为返回 3.1a `PaymentListPage`，仅影响支付列表；详情及其他接口不变。这是前端/协议侧草案，后台投影与端到端联调尚未完成。
 
+> **037 提案（2026-11-14，待评审，未批准）**：036 列表草案的批准**仅适用于 `GET /payments`**，不延伸到详情。`GET /payments/{id}` 现行仍为 3.1 完整 `Payment`，但其中 `paidAmount`、`submittedAt`、`closedAt`、`failedAt`、`failReason`、`refundCount` 在核心 alpha.3 Payment 中无权威来源，`EXTERNAL` 的 `subject` 可为 null 也与 3.1 冲突。本版选择**方案 B：另立精简详情视图 `portal-payment-detail-view/0.1-draft`（3.1b）**，不采用“可缺省字段”，也不由前端补造字段来源。3.1b 评审通过前，前端类型、Mock、HTTP 解析与详情页**均不改动**；后台投影与端到端联调未开始。
+
 本文档描述商户后台前端（Portal）所依赖的网页接口。它与 `src/services/api/types.ts`、`src/types/index.ts` 的对应关系**只用于保证 UI 草案内部一致**，不能凌驾于已锁定的跨系统规则；两者与核心规则冲突时，以核心规则为准，并同步修改本文档与前端代码。
 
 > **架构限制（已确认）：禁止开放 API 用于门户；允许独立内部接口。** 调用链为：浏览器 → merchant-platform 独立网页接口（本文）→ 另行设计的支付领域内部接口 → 核心资金领域。
@@ -188,6 +190,8 @@
 
 ### 3.1 Payment 支付订单
 
+> **来源缺口（037）**：下表中 `paidAmount`、`submittedAt`、`closedAt`、`failedAt`、`failReason`、`refundCount` 在核心 alpha.3 Payment 中**无权威来源**；`subject` 定义为必为 string，与 `EXTERNAL` 可无商品描述的事实冲突。在核心提供来源并修订本表前，本表**不能作为后台交付依据**，不得以 `0`、`""`、统一 `null` 或占位描述填充上述字段冒充已交付。详情的候选替代见 3.1b。
+
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 平台支付订单号 |
@@ -285,6 +289,57 @@
 | `asOf` | 查询快照时间 |
 
 **页数计算**：前端以 `BigInt` 计算 `ceil(total / pageSize)`，全程不经 `Number`。可导航页数取 `min(精确页数, 1000000)`；超出时 `total` 照常完整显示，并提示用户缩小筛选范围。`total` 的千分位格式化直接作用于十进制字符串。
+
+### 3.1b PaymentDetailView 支付详情精简视图（037 提案，`portal-payment-detail-view/0.1-draft`，**待评审，未批准**）
+
+> **状态：仅为候选提案。** 不是已批准协议；3.1a 列表草案的批准不覆盖本节。评审通过前 `GET /payments/{id}` 仍按 3.1 定义，前端不切换。本节只涉及 `GET /payments/{id}`；`GET /dashboard/recent-payments`、导出、搜索等仍引用 3.1，存在同样的来源缺口，**不在本提案范围内**，需另行评审。
+
+**方案选择**：
+
+| 方案 | 结论 | 理由 |
+| --- | --- | --- |
+| A. 提供权威来源并修订 3.1 | 本轮不选 | 字段来源须由核心/内部能力契约提供，前端无法给出；待核心新增来源后可按 A 升级（见下“演进”） |
+| B. 另立精简详情视图 | **选用** | 只声明已有权威来源的事实；不存在的字段不出现 |
+| C. 将六字段改为可缺省 | 不选 | “键缺失”无法区分“核心无此能力”“暂未取得”与“畸形响应”，前端解析会变得含糊，容易被当作已交付 |
+
+**`PaymentDetailItem` 字段**：与 3.1a `PaymentListItem` **同一组 22 个键、同一类型与约束**（含 `source` 与 `merchantOrderNo`/`subject` 的联动规则、`status`/`refundAggregate` 显式映射、金额字符串语义、`refundEligibility`/`collectionVerification` 在本视图中不为 `null`）。全部必需，不得增减或省略键。详情目前没有超出列表的权威字段，因此不新增键；以后新增须升版本。
+
+**明确不包含**：`paidAmount`、`submittedAt`、`closedAt`、`failedAt`、`failReason`、`refundCount`。这些键**不出现**，不是值为 `null`。`null` 在本协议中表示“核心提供了该字段，当前值为空”，不能借用来表示“没有该能力”。
+
+**响应包装**：
+
+```json
+{
+  "viewVersion": "portal-payment-detail-view/0.1-draft",
+  "payment": { "...": "PaymentDetailItem，22 键" },
+  "asOf": "2026-11-14T08:00:00.000Z"
+}
+```
+
+| 字段 | 规则 |
+| --- | --- |
+| `viewVersion` | 固定字面量；前端不认识的版本按畸形响应处理，不猜测字段，不回退 3.1 解析 |
+| `payment` | 键集合必须恰好等于 22 键；多键、少键或出现上述六字段之一均按畸形响应处理 |
+| `asOf` | 查询快照时间 |
+
+**对页面的影响（评审通过后才实施）**：
+
+| 现有展示 | 改为 |
+| --- | --- |
+| 金额卡“实收”（`paidAmount`） | 移除“实收”；只显示订单金额 `amount`。不以 `amount` 冒充实收 |
+| 时间线“用户提交支付”（`submittedAt`） | 移除该节点 |
+| 时间线“支付成功” | 保留，时间取 `paidAt`；备注不再写“实收 X” |
+| 时间线“支付失败 / 订单关闭”（`failedAt` / `closedAt`） | 保留状态节点，但**不显示时间**；不以 `createdAt`/`expireAt` 推算 |
+| 失败原因提示（`failReason`） | 移除；只显示“支付失败”状态，不生成通用失败原因冒充渠道原因 |
+| 关闭说明“超时未支付或商户主动关闭” | 移除。这是推断，不是事实 |
+| 退款笔数（`refundCount`） | 不从 Payment 读取；继续用现有 `GET /refunds?paymentId=` 返回的 `Paginated.total`，按退款列表口径标注 |
+| 商品描述（`subject`） | `EXTERNAL` 为 `null` 时显示“—”；占位只用于渲染，不回写数据 |
+
+**对类型与实现的影响（评审通过后才实施）**：新增 `PaymentDetailItem` / `PaymentDetailView` 类型；`MerchantApi.payments.get` 返回 `PaymentDetailView`；Mock 按 22 键显式投影；HTTP 端严格校验键集合与 `viewVersion`；3.1 `Payment` 仍由 `recent-payments` 等未评审接口使用，暂不删除。
+
+**演进**：核心以后为某字段提供权威来源时，以 `portal-payment-detail-view/0.2-draft` 单独评审加入，并写明来源与 `null` 的含义。不得在 0.1 中悄悄增加键。
+
+**不受本提案影响**：5.2 `RefundableInfo` 沿用现行定义，本轮无协议改动。`ineligibleReason` 只是根据现有资格枚举生成的通用展示文字，不代表核心提供了具体渠道原因。金额或资格未知时仍为 `null`，前端仍保守禁用。最终资金校验仍由核心在提交时原子完成，页面与只读接口都不能替代。
 
 ### 3.2 Refund 退款
 
@@ -588,7 +643,9 @@ HTTP 模式实现位于 `src/services/http/`（`client.ts` 统一 fetch，`api.t
 
 单个条件为空字符串时视为未传。
 
-#### `GET /payments/{id}` → `Payment`
+#### `GET /payments/{id}` → `Payment`（现行 3.1；候选 3.1b `PaymentDetailView` 待评审）
+
+036 列表草案的批准不适用于本接口。现行 3.1 中六个字段在 alpha.3 无权威来源（见 3.1 来源缺口），因此本接口**目前没有可交付的权威定义**。3.1b 评审通过后，本接口改为返回 `PaymentDetailView`，前端同步切换；在此之前前端维持现状，HTTP 联调不以本接口作为验收项。
 
 #### `GET /payments/{id}/refundable` → `RefundableInfo`
 
