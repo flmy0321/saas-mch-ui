@@ -6,6 +6,8 @@
 
 > **037 提案（2026-11-14，待评审，未批准）**：036 列表草案的批准**仅适用于 `GET /payments`**，不延伸到详情。`GET /payments/{id}` 现行仍为 3.1 完整 `Payment`，但其中 `paidAmount`、`submittedAt`、`closedAt`、`failedAt`、`failReason`、`refundCount` 在核心 alpha.3 Payment 中无权威来源，`EXTERNAL` 的 `subject` 可为 null 也与 3.1 冲突。本版选择**方案 B：另立精简详情视图 `portal-payment-detail-view/0.1-draft`（3.1b）**，不采用“可缺省字段”，也不由前端补造字段来源。3.1b 评审通过前，前端类型、Mock、HTTP 解析与详情页**均不改动**；后台投影与端到端联调未开始。
 
+> **038 提案（2026-11-14，待后台复核，未批准）**：针对商户资料、门店列表/详情、App 列表/详情、退款列表/详情/按商户退款号精确查询，另立五个只读精简视图（见 **3.8**），逐项处理核心契约无法提供的字段。**本轮只改文档**；前端类型、Mock、HTTP 解析与页面均未改动，复核通过后再改 UI 代码。这些接口后台仅完成离线消费者，**尚无真实环境调用与端到端验收**。
+
 本文档描述商户后台前端（Portal）所依赖的网页接口。它与 `src/services/api/types.ts`、`src/types/index.ts` 的对应关系**只用于保证 UI 草案内部一致**，不能凌驾于已锁定的跨系统规则；两者与核心规则冲突时，以核心规则为准，并同步修改本文档与前端代码。
 
 > **架构限制（已确认）：禁止开放 API 用于门户；允许独立内部接口。** 调用链为：浏览器 → merchant-platform 独立网页接口（本文）→ 另行设计的支付领域内部接口 → 核心资金领域。
@@ -343,6 +345,8 @@
 
 ### 3.2 Refund 退款
 
+> 现行定义。只读接口的候选精简视图 `RefundView` 见 3.8.4（待复核）。
+
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 平台退款单号 |
@@ -361,6 +365,8 @@
 
 ### 3.3 Store 门店
 
+> 现行定义。只读接口的候选精简视图 `StoreView` 见 3.8.2（待复核）。
+
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | |
@@ -372,6 +378,8 @@
 | `createdAt` | string | |
 
 ### 3.4 MerchantApp 应用
+
+> 现行定义。候选精简视图 `AppView` 与分页列表见 3.8.3（待复核）。
 
 `id`, `appId`, `name`, `description`, `env: AppEnv`, `status: AppStatus`, `createdAt`, `permissions: string[]`（如 `payment.create`、`refund.create`）。
 
@@ -424,7 +432,7 @@
 
 ### 3.7 账户
 
-- `Merchant`：`merchantNo`, `name`, `shortName`, `status: ACTIVE | RESTRICTED`, `legalName`, `creditCode`, `industry`, `contactEmail`, `contactPhone`, `address`, `createdAt`
+- `Merchant`（现行定义；候选 `MerchantProfileView` 见 3.8.1，待复核）：`merchantNo`, `name`, `shortName`, `status: ACTIVE | RESTRICTED`, `legalName`, `creditCode`, `industry`, `contactEmail`, `contactPhone`, `address`, `createdAt`
 - `CurrentUser`：`id`, `name`, `email`, `phone`, `role`, `lastLoginAt`, `lastLoginIp`。`role` 仅用于展示，**服务端授权不得只依赖此字符串**，须基于成员关系、当前租户与资源范围（见第 7 节）
 - `LoginSession`：`id`, `device`, `browser`, `ip`, `location`, `lastActiveAt`, `current: boolean`
 - `Captcha`：`captchaId`, `image`（data URL）, `expiresIn`（秒）
@@ -433,6 +441,135 @@
 - `SelectMerchantInput`：`selectionToken`, `tenantId`
 - `AuthTokens`：`tokenType: "Bearer"`, `accessToken`, `expiresIn`（秒）, `refreshToken`, `refreshExpiresIn`（秒）；`LoginResult` = `AuthTokens` + `user: CurrentUser`（仅为第二步 `select-merchant` 的结果）
 - `Notification`：`id`, `title`, `description`, `createdAt`, `read`, `level: info | warning | danger`, `link?`（前端路由路径，如 `/payments/pay_xxx`）
+
+### 3.8 剩余只读接口精简视图（038 提案，**待后台复核，未批准**）
+
+> **状态：仅为候选提案，不是已批准协议。** 复核通过前，3.2、3.3、3.4、3.7 与 5.3、5.5、5.6、5.8 的现行定义不变，前端不切换。后台目前只完成这些接口的离线消费者，**没有真实环境调用，也没有端到端验收**。036 列表与 037 详情的结论都不自动套用到本节。**支付详情**的同类缺口（`paidAmount`、`submittedAt`、`closedAt`、`failedAt`、`failReason`、`refundCount` 无来源，`EXTERNAL` 的 `subject` 可为 `null`）已在 3.1b（037，`portal-payment-detail-view/0.1-draft`）单独提出，本节不重复定义。
+
+#### 3.8.0 共同规则
+
+1. **不出现即不提供**：核心无权威来源的字段从视图中删除（键不出现），**不以 `0`、`""`、`[]` 或统一 `null` 占位**。`null` 只表示“核心有该字段，当前值为空”。
+2. **键集合严格**：每个视图列出的键全部必需（可空字段也必须出现）；多键、少键、出现已删除字段或 `viewVersion` 不认识，前端都按畸形响应处理，不猜测字段，不回退到旧定义解析。
+3. **状态原值展示**：状态直接使用核心取值。前端只为已列出的取值配置文案，其他值显示“未知(原值)”；**不把未知或非 `ACTIVE` 状态映射为“正常”**。页面上的状态展示不能作为服务端授权依据，服务端独立判断。
+4. **分页 `total` 本轮保持 int**：只有支付列表（3.1a）使用 `ExactCount` 字符串。本节的列表仍用 1.4 的 `Paginated<T>` 与 int `total`。是否统一改为精确字符串，另立 `portal-pagination/0.2-draft` 单独评审，**本提案不顺带修改**。
+5. **金额**：沿用 1.1 `AmountDecimal` 字符串语义；未知本金与额度保持 `null`。退款资格查询不代表获得退款写权限。
+6. **非必需字段的处理**：页面并不需要的字段直接删除；确实需要的，下表写明用途，由后台协调权威来源，来源确定后以各视图的 `0.2-draft` 单独评审加入。
+
+响应包装统一为：
+
+```json
+{ "viewVersion": "<见各视图>", "<资源名>": { "...": "..." }, "asOf": "2026-11-14T08:00:00.000Z" }
+```
+
+列表为 `{ "viewVersion", "items", "total", "page", "pageSize", "asOf" }`，其中 `total` 为 int，其余同 1.4。
+
+#### 3.8.1 商户资料 `MerchantProfileView`（`portal-merchant-profile-view/0.1-draft`）
+
+适用于 `GET /account/merchant`，包装键为 `merchant`。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `merchantNo` | string | 商户号 |
+| `name` | string | 商户名称 |
+| `status` | string | 核心原值：`ACTIVE` 正常 · `DISABLED` 已停用 · `CLOSED` 已注销；其他值为“未知(原值)” |
+| `createdAt` | string | 开通时间 |
+
+**删除**：`shortName`、`legalName`、`creditCode`、`industry`、`contactEmail`、`contactPhone`、`address`；不再使用 `ACTIVE/RESTRICTED`。
+
+| 删除字段 | 是否必需 | 说明 |
+| --- | --- | --- |
+| `shortName` | 否 | 只用于头像首字，改用 `name` 首字 |
+| `industry`、`address`、`contactEmail`、`contactPhone` | 否 | 只是资料展示，直接删除 |
+| `legalName`、`creditCode` | **待产品确认** | 用途：商户核对签约主体与资质。若产品认为必需，由后台协调权威来源后以 0.2 加入；在此之前不展示 |
+
+#### 3.8.2 门店 `StoreView`（`portal-store-view/0.1-draft`）
+
+适用于 `GET /stores`（列表，`Paginated`，int `total`）与 `GET /stores/{id}`（包装键为 `store`）。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | |
+| `storeNo` | string | 平台门店编号 |
+| `merchantStoreNo` | string \| null | 商户门店编号；**可为 `null`**，表示核心无此值 |
+| `name` | string | |
+| `status` | string | 核心原值：`ACTIVE` 营业中 · `DISABLED` 已停用 · `CLOSED` 已关闭；其他值为“未知(原值)” |
+| `createdAt` | string | |
+
+**删除**：`address`、`contactName`、`contactPhone`（只用于展示，非必需）。
+
+- 筛选 `status` 的可选值改为 `ACTIVE` / `DISABLED` / `CLOSED`。
+- `keyword` 匹配名称、平台门店编号，以及**非空的**商户门店编号；`null` 不参与匹配，也不被当作空字符串。
+- **不在本提案范围**：`GET /stores/options`、`GET /stores/{id}/stats`、`POST/PUT /stores`。写入体 `StoreInput` 中的地址、联系人字段在核心无对应存储，与只读视图冲突，需在门店写契约中单独评审；本轮不改。
+
+#### 3.8.3 App `AppView`（`portal-app-view/0.1-draft`）
+
+适用于 `GET /apps` 与 `GET /apps/{appId}`（包装键为 `app`）。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | |
+| `appId` | string | |
+| `name` | string | |
+| `env` | `production` \| `sandbox` | 其他值为“未知(原值)” |
+| `status` | string | 核心原值：`ACTIVE` 已启用 · `DISABLED` 已停用 · `REVOKED` 已吊销；其他值为“未知(原值)” |
+| `createdAt` | string | |
+
+**删除**：`description`（非必需）、`permissions`（**待产品确认**。用途：商户排查开放接口调用被拒的原因。若产品认为必需，由后台协调权威来源后以 0.2 加入；在此之前不展示权限面板，**不以空数组表示“未开通”**）。
+
+**列表形态：选择分页视图。** `GET /apps` 改为 `Paginated<AppView>`，参数 `page`、`pageSize`（1–100），`sortBy=createdAt`（默认 `desc`），`total` 为 int。不要求后台提供“完整数组”聚合能力。
+
+- App 列表页按分页展示。
+- 应用选择器（API 密钥、Webhook 配置、通知记录页共用）按页加载，显示“已加载 N / 共 total 个”，未加载完时提供“加载更多”；**不把第一页当作全部 App**。
+
+#### 3.8.4 退款 `RefundView`（`portal-refund-view/0.1-draft`）
+
+适用于 `GET /refunds`（列表，`Paginated`，int `total`）、`GET /refunds/{id}` 与 `GET /refunds/by-merchant-refund-no/{merchantRefundNo}?paymentId=`（包装键为 `refund`）。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 平台退款单号 |
+| `merchantRefundNo` | string \| null | **可为 `null`**（如非经本门户创建的退款） |
+| `paymentId` | string | 原支付订单 |
+| `storeId` / `storeName` | string \| null | **待后台确认核心有来源**；若无来源，同样删除 |
+| `amount` | AmountDecimal | 退款金额 |
+| `status` | RefundStatus | 第 2 节取值；其他值为“未知(原值)” |
+| `reason` | string \| null | **可为 `null`**，表示核心无此值 |
+| `createdAt` | string | |
+| `finishedAt` | string \| null | 到达终态时间；**待后台确认核心有来源** |
+
+**删除**：`merchantOrderNo`、`channel`、`updatedAt`、`failReason`、`progress`。
+
+- **没有状态历史，不画进度时间线**：只展示当前状态、创建时间和（若有）完成时间，不按状态推算中间节点。
+- 原商户订单号、支付渠道属于原支付订单的事实。详情页如需展示，另行请求 `GET /payments/{paymentId}`，并标注“来自原支付订单”，不写入退款视图。
+- 退款失败只显示“退款失败”，不生成通用失败原因冒充渠道原因，也不提示“可重新发起退款”。能否再退由 R1a 与实时 `RefundableInfo` 决定。
+
+**精确查询（修订 5.3 对应条目）：**
+
+1. 必须同时携带 `paymentId` 与 `merchantRefundNo`；缺任一返回 `400 VALIDATION`。
+2. 找到时返回 `200` + `RefundView`。前端校验返回的 `paymentId` 与 `merchantRefundNo` 都与请求一致（`merchantRefundNo` 为 `null` 视为不一致）；不一致按异常处理，保持“待确认”。
+3. 找不到时返回 `404 NOT_FOUND`。核心目前只有统一的“资源不存在或不可见”，**无法区分支付不存在与退款不存在**，因此删除原 `PAYMENT_NOT_FOUND` / `REFUND_NOT_FOUND` 区分。
+4. **删除 `authoritative` 字段**：核心没有“确定未受理”的证明，后台不得自行生成 `authoritative=true`。
+5. 前端收到 `404` 时**保持待确认**：不自动重提、不换号、不开放新建，只提示“暂未查到，请稍后刷新或联系客服”。
+6. `POST /refunds` 的响应体与资源分类（1.3 优先级 2）不在本提案范围，仍按 3.2 解析，需另行评审。
+
+#### 3.8.5 对现有页面与类型的影响（复核通过后才实施）
+
+| 位置 | 改动 |
+| --- | --- |
+| `src/types/index.ts` | 新增 `MerchantProfileView`、`StoreView`、`AppView`、`RefundView` 及对应包装类型；`Merchant`/`Store`/`MerchantApp`/`Refund` 在仍有未评审接口使用时暂不删除 |
+| `src/services/api/types.ts` | `account.merchant`、`stores.list/get`、`apps.list/get`、`refunds.list/get/findByMerchantRefundNo` 改返回新视图；`apps.list` 增加分页参数；`ApiError.authoritative` 删除 |
+| `src/services/mock/*`、`src/services/http/*` | Mock 按新键集合显式投影；HTTP 严格校验 `viewVersion` 与键集合；精确查询 404 不再携带 `authoritative` |
+| `MerchantProfilePage.vue` | 只展示商户号、名称、状态、开通时间；删除主体资质、联系方式、地址分组 |
+| `AppHeader.vue` | 头像首字由 `shortName` 改为 `name` |
+| `StoreListPage.vue` / `StoreDetailPage.vue` | 删除地址、联系人列与字段；`merchantStoreNo` 为 `null` 时显示“—”；状态增加 `CLOSED` 与未知值 |
+| `AppListPage.vue` / `useAppPicker.ts` | 改为分页；选择器按页加载并显示已加载/总数 |
+| `AppDetailPage.vue` | 删除应用描述与接口权限面板；状态增加 `REVOKED` 与未知值 |
+| `RefundListPage.vue` / `refundColumns.ts` | `merchantRefundNo` 为 `null` 时显示“—” |
+| `RefundDetailPage.vue` | 删除进度时间线、最近更新、失败原因、退款渠道、原商户订单号；`reason` 为 `null` 显示“—”；可选从原支付订单读取并标注来源 |
+| `CreateRefundDialog.vue` | 精确查询 404 不再区分 `authoritative`，统一保持待确认 |
+| 开发者文档页 | 同步精确查询 404 语义 |
+
+**演进**：任一视图需要新增字段时，以该视图的 `0.2-draft` 单独评审，并写明权威来源与 `null` 的含义。不得在 0.1 中悄悄增加键。
 
 ---
 
@@ -765,6 +902,8 @@ HTTP 模式实现位于 `src/services/http/`（`client.ts` 统一 fetch，`api.t
 - 恢复上下文按 R3 保存 `paymentId`，不另存 App ID 作为查询参数。
 
 #### `GET /refunds/by-merchant-refund-no/{merchantRefundNo}?paymentId=` → `Refund`
+
+> 候选修订见 3.8.4（待复核）：统一 `404 NOT_FOUND`，删除 `authoritative` 与 `PAYMENT_NOT_FOUND`/`REFUND_NOT_FOUND` 区分，404 时前端保持待确认。复核通过前下文仍为现行定义。
 
 在 `paymentId` 所确定的幂等作用域内按商户退款编号**精确匹配**（见 R4），用于结果未知时的确认。缺少 `paymentId` 返回 `400 VALIDATION`；订单不存在或不属于当前商户返回 `404 NOT_FOUND`。
 
