@@ -19,7 +19,7 @@ import { useAsync } from '@/composables/useAsync'
 import { useTradeCharts, type SeriesPoint } from '@/composables/useTradeCharts'
 import { buildPaymentColumns } from '@/pages/payments/paymentColumns'
 import { api } from '@/services/api'
-import { STORE_STATUS } from '@/utils/dictionaries'
+import { storeViewStatusMeta } from '@/utils/dictionaries'
 import { formatDateTime, formatMoney, formatNumber, formatPercent } from '@/utils/format'
 import type { PaymentListItem } from '@/types'
 
@@ -31,7 +31,9 @@ const store = useAsync(() => api.stores.get(id.value))
 const stats = useAsync(() => api.stores.stats(id.value))
 const recent = useAsync(() => api.payments.list({ storeId: id.value, page: 1, pageSize: 8 }))
 
-const s = computed(() => store.data.value)
+const s = computed(() => store.data.value?.store ?? null)
+const statusMeta = computed(() => storeViewStatusMeta(s.value?.status))
+const editable = computed(() => s.value?.status === 'ACTIVE' || s.value?.status === 'DISABLED')
 const st = computed(() => stats.data.value)
 const notFound = computed(() => store.error.value?.includes('不存在'))
 const editOpen = ref(false)
@@ -44,10 +46,8 @@ const items = computed(() =>
   s.value
     ? [
         { key: 'storeNo', label: '平台门店编号', value: s.value.storeNo },
-        { key: 'merchantStoreNo', label: '商户门店编号', value: s.value.merchantStoreNo },
-        { key: 'contact', label: '联系人', value: `${s.value.contactName}  ${s.value.contactPhone}` },
+        { key: 'merchantStoreNo', label: '商户门店编号', value: s.value.merchantStoreNo ?? '—' },
         { key: 'createdAt', label: '创建时间', value: formatDateTime(s.value.createdAt) },
-        { key: 'address', label: '门店地址', value: s.value.address },
       ]
     : [],
 )
@@ -71,11 +71,11 @@ const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'merchant
             </Button>
             <h1 v-if="s" class="text-xl font-semibold tracking-tight">{{ s.name }}</h1>
             <Skeleton v-else class="h-7 w-48" />
-            <StatusBadge v-if="s" :tone="STORE_STATUS[s.status].tone" dot>{{ STORE_STATUS[s.status].label }}</StatusBadge>
+            <StatusBadge v-if="s" :tone="statusMeta.tone" dot>{{ statusMeta.label }}</StatusBadge>
           </div>
         </template>
         <template #actions>
-          <Button :disabled="!s" @click="editOpen = true"><Pencil aria-hidden="true" />编辑门店</Button>
+          <Button :disabled="!editable" @click="editOpen = true"><Pencil aria-hidden="true" />编辑门店</Button>
         </template>
       </PageHeader>
 

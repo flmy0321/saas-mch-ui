@@ -13,16 +13,22 @@ import type {
   LoginInput,
   LoginResult,
   LoginSession,
-  Merchant,
+  AppQuery,
+  AppViewPage,
+  AppViewSingle,
+  MerchantProfileView,
+  PaymentDetailView,
+  RefundViewPage,
+  RefundViewSingle,
+  StoreViewPage,
+  StoreViewSingle,
   MerchantSelection,
   SelectMerchantInput,
-  MerchantApp,
   Notification,
   Paginated,
   PaymentListPage,
   Payment,
   PaymentQuery,
-  Refund,
   RefundQuery,
   RefundableInfo,
   Store,
@@ -64,32 +70,34 @@ export interface MerchantApi {
   payments: {
     /** 精简列表视图（协议 4.1a），不复用详情 Payment */
     list(query: PaymentQuery): Promise<PaymentListPage>
-    get(id: string): Promise<Payment>
+    /** 详情视图（协议 3.1b / 037）：22 键，不含六个无来源字段 */
+    get(id: string): Promise<PaymentDetailView>
     refundable(id: string): Promise<RefundableInfo>
     exportCsv(query: PaymentQuery): Promise<{ filename: string; rows: number; content: string }>
   }
   refunds: {
-    list(query: RefundQuery): Promise<Paginated<Refund>>
-    get(id: string): Promise<Refund>
+    list(query: RefundQuery): Promise<RefundViewPage>
+    get(id: string): Promise<RefundViewSingle>
     /** 资金写操作：结果须经 classifyRefundWrite 分类，不得把 resolve 直接当作成功 */
     create(input: CreateRefundInput): Promise<unknown>
-    /** 在 paymentId 确定的幂等作用域内精确匹配（R4）；找不到抛 404 NOT_FOUND */
-    findByMerchantRefundNo(paymentId: string, merchantRefundNo: string): Promise<Refund>
+    /** 协议 3.8.4：两个请求键必须同时匹配；找不到统一 404 NOT_FOUND，不带 authoritative */
+    findByMerchantRefundNo(paymentId: string, merchantRefundNo: string): Promise<RefundViewSingle>
   }
   analytics: {
     query(q: AnalyticsQuery): Promise<AnalyticsResult>
   }
   stores: {
-    list(query: StoreQuery): Promise<Paginated<Store>>
+    list(query: StoreQuery): Promise<StoreViewPage>
     all(): Promise<Store[]>
-    get(id: string): Promise<Store>
+    get(id: string): Promise<StoreViewSingle>
     stats(id: string): Promise<StoreStats>
     create(input: StoreInput): Promise<Store>
     update(id: string, input: StoreInput): Promise<Store>
   }
   apps: {
-    list(): Promise<MerchantApp[]>
-    get(appId: string): Promise<MerchantApp>
+    /** 分页视图（协议 3.8.3），不承诺跨页快照一致 */
+    list(query: AppQuery): Promise<AppViewPage>
+    get(appId: string): Promise<AppViewSingle>
   }
   keys: {
     list(appId?: string): Promise<ApiKey[]>
@@ -105,7 +113,7 @@ export interface MerchantApi {
     deliveriesFor(resourceId: string): Promise<WebhookDelivery[]>
   }
   account: {
-    merchant(): Promise<Merchant>
+    merchant(): Promise<MerchantProfileView>
     me(): Promise<CurrentUser>
     updateMe(input: Pick<CurrentUser, 'name'>): Promise<CurrentUser>
     changePassword(input: { current: string; next: string }): Promise<void>

@@ -18,9 +18,9 @@ import StoreFormDrawer from '@/components/business/StoreFormDrawer.vue'
 import { useAsync } from '@/composables/useAsync'
 import { useQueryFilters } from '@/composables/useQueryFilters'
 import { api } from '@/services/api'
-import { STORE_STATUS, toOptions } from '@/utils/dictionaries'
+import { STORE_VIEW_STATUS, storeViewStatusMeta, toOptions } from '@/utils/dictionaries'
 import { formatDateTime, formatNumber } from '@/utils/format'
-import type { Store, StoreStatus } from '@/types'
+import type { Store, StoreView } from '@/types'
 
 const router = useRouter()
 const filters = useQueryFilters({ keyword: '', status: '' })
@@ -30,47 +30,43 @@ const query = computed(() => ({
   page: page.value,
   pageSize: pageSize.value,
   keyword: applied.value.keyword || undefined,
-  status: (applied.value.status || undefined) as StoreStatus | undefined,
+  status: applied.value.status || undefined,
 }))
 const list = useAsync(() => api.stores.list(query.value), { watch: query })
 
 const drawerOpen = ref(false)
-const editing = ref<Store | null>(null)
+const editing = ref<StoreView | null>(null)
 function openCreate() {
   editing.value = null
   drawerOpen.value = true
 }
-function openEdit(s: Store) {
+function openEdit(s: StoreView) {
   editing.value = s
   drawerOpen.value = true
 }
 
 const muted = (t: string) => h('span', { class: 'text-muted-foreground whitespace-nowrap' }, t)
-const columns: ColumnDef<Store>[] = [
+const columns: ColumnDef<StoreView>[] = [
   {
     id: 'name',
     header: '门店名称',
     cell: ({ row }) =>
-      h('div', { class: 'flex flex-col' }, [
-        h('span', { class: 'font-medium' }, row.original.name),
-        h('span', { class: 'text-xs text-muted-foreground truncate max-w-72' }, row.original.address),
-      ]),
+h('span', { class: 'font-medium' }, row.original.name),
   },
   { id: 'storeNo', header: '平台门店编号', cell: ({ row }) => h(OrderNumber, { value: row.original.storeNo }) },
-  { id: 'merchantStoreNo', header: '商户门店编号', cell: ({ row }) => h(OrderNumber, { value: row.original.merchantStoreNo, muted: true, copyable: false }) },
   {
-    id: 'contact',
-    header: '联系人',
+    id: 'merchantStoreNo',
+    header: '商户门店编号',
     cell: ({ row }) =>
-      h('div', { class: 'flex flex-col whitespace-nowrap' }, [
-        h('span', row.original.contactName),
-        h('span', { class: 'text-xs text-muted-foreground tabular' }, row.original.contactPhone),
-      ]),
+      row.original.merchantStoreNo === null ? muted('—') : h(OrderNumber, { value: row.original.merchantStoreNo, muted: true, copyable: false }),
   },
   {
     id: 'status',
     header: '状态',
-    cell: ({ row }) => h(StatusBadge, { tone: STORE_STATUS[row.original.status].tone, dot: true }, () => STORE_STATUS[row.original.status].label),
+    cell: ({ row }) => {
+      const m = storeViewStatusMeta(row.original.status)
+      return h(StatusBadge, { tone: m.tone, dot: true }, () => m.label)
+    },
   },
   { id: 'createdAt', header: '创建时间', cell: ({ row }) => muted(formatDateTime(row.original.createdAt)) },
   {
@@ -111,10 +107,10 @@ function onSaved(s: Store) {
     <Card body-class="p-0">
       <FilterPanel :active-count="filters.activeCount.value" @apply="filters.apply()" @reset="filters.reset()">
         <FormField label="关键词" for="st-kw" class="lg:col-span-2">
-          <Input id="st-kw" v-model="draft.keyword" placeholder="门店名称、编号或联系人" />
+          <Input id="st-kw" v-model="draft.keyword" placeholder="门店名称或编号" />
         </FormField>
         <FormField label="状态" for="st-status">
-          <Select id="st-status" v-model="draft.status" :options="toOptions(STORE_STATUS)" allow-all />
+          <Select id="st-status" v-model="draft.status" :options="toOptions(STORE_VIEW_STATUS)" allow-all />
         </FormField>
       </FilterPanel>
 
@@ -129,11 +125,11 @@ function onSaved(s: Store) {
         :data="list.data.value?.items ?? []"
         :loading="list.loading.value"
         :error="list.error.value"
-        :row-key="(r: Store) => r.id"
+        :row-key="(r: StoreView) => r.id"
         clickable
         empty-title="暂无门店"
         empty-description="创建第一家门店，开始按门店统计交易。"
-        @row-click="(r: Store) => router.push(`/stores/${r.id}`)"
+        @row-click="(r: StoreView) => router.push(`/stores/${r.id}`)"
         @retry="list.reload()"
       >
         <template #empty-actions>

@@ -108,6 +108,25 @@ export const STORE_STATUS: Record<StoreStatus, Meta> = {
   DISABLED: { label: '已停用', tone: 'neutral' },
 }
 
+/** 038 视图状态（核心原值）；未知值原样显示为“未知(原值)” */
+export const STORE_VIEW_STATUS: Record<'ACTIVE' | 'DISABLED' | 'CLOSED', Meta> = {
+  ACTIVE: { label: '营业中', tone: 'success' },
+  DISABLED: { label: '已停用', tone: 'neutral' },
+  CLOSED: { label: '已关闭', tone: 'neutral' },
+}
+export const MERCHANT_STATUS: Record<'ACTIVE' | 'DISABLED' | 'CLOSED', Meta> = {
+  ACTIVE: { label: '正常', tone: 'success' },
+  DISABLED: { label: '已停用', tone: 'warning' },
+  CLOSED: { label: '已关闭', tone: 'neutral' },
+}
+export const APP_STATUS: Record<'ACTIVE' | 'DISABLED' | 'REVOKED', Meta> = {
+  ACTIVE: { label: '已启用', tone: 'success' },
+  DISABLED: { label: '已停用', tone: 'neutral' },
+  REVOKED: { label: '已吊销', tone: 'danger' },
+}
+const viewUnknown = (v: string | null | undefined): Meta =>
+  v ? { label: `未知(${v})`, tone: 'neutral', description: UNKNOWN_HINT } : { label: '—', tone: 'neutral' }
+
 export const WEBHOOK_STATUS: Record<'SUCCESS' | 'FAILED' | 'RETRYING', Meta> = {
   SUCCESS: { label: '通知成功', tone: 'success' },
   FAILED: { label: '通知失败', tone: 'danger' },
@@ -154,6 +173,10 @@ export const collectionVerificationMeta = (v: string | null | undefined) =>
 export const webhookStatusMeta = (v: string | null | undefined) => lookup(WEBHOOK_STATUS, v) ?? unknownMeta(v)
 export const channelMeta = (v: string | null | undefined): ChannelMeta & { unknown?: boolean } =>
   lookup(CHANNEL, v) ?? { label: v || '—', short: v || '—', color: 'var(--muted-foreground)', unknown: true }
+export const storeViewStatusMeta = (v: string | null | undefined) => lookup(STORE_VIEW_STATUS, v) ?? viewUnknown(v)
+export const merchantStatusMeta = (v: string | null | undefined) => lookup(MERCHANT_STATUS, v) ?? viewUnknown(v)
+export const appStatusMeta = (v: string | null | undefined) => lookup(APP_STATUS, v) ?? viewUnknown(v)
+export const appEnvMeta = (v: string | null | undefined) => lookup(APP_ENV, v) ?? viewUnknown(v)
 export const PAYMENT_SOURCE: Record<'API' | 'EXTERNAL', string> = { API: '开放 API', EXTERNAL: '外部收款' }
 export const paymentSourceLabel = (v: string | null | undefined) => lookup(PAYMENT_SOURCE, v) ?? (v || '—')
 export const methodLabel = (v: string | null | undefined) => lookup(METHOD, v) ?? (v || '—')

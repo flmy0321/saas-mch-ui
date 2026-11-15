@@ -3,11 +3,14 @@ import { RouterLink } from 'vue-router'
 import { ArrowUpRight, Boxes } from '@lucide/vue'
 import StatusBadge from '@/components/ui/StatusBadge.vue'
 import OrderNumber from './OrderNumber.vue'
-import { APP_ENV } from '@/utils/dictionaries'
+import { computed } from 'vue'
+import { appEnvMeta, appStatusMeta } from '@/utils/dictionaries'
 import { formatDate } from '@/utils/format'
-import type { MerchantApp } from '@/types'
+import type { AppView } from '@/types'
 
-defineProps<{ app: MerchantApp }>()
+const props = defineProps<{ app: AppView }>()
+const env = computed(() => appEnvMeta(props.app.env))
+const status = computed(() => appStatusMeta(props.app.status))
 </script>
 
 <template>
@@ -19,10 +22,8 @@ defineProps<{ app: MerchantApp }>()
         <Boxes class="size-5" aria-hidden="true" />
       </div>
       <div class="flex gap-1.5">
-        <StatusBadge :tone="APP_ENV[app.env].tone" :dot="false">{{ APP_ENV[app.env].label }}</StatusBadge>
-        <StatusBadge :tone="app.status === 'ACTIVE' ? 'success' : 'neutral'">
-          {{ app.status === 'ACTIVE' ? '已启用' : '已停用' }}
-        </StatusBadge>
+        <StatusBadge :tone="env.tone" :dot="false">{{ env.label }}</StatusBadge>
+        <StatusBadge :tone="status.tone">{{ status.label }}</StatusBadge>
       </div>
     </div>
     <h3 class="mt-4 text-[15px] font-semibold">
@@ -30,7 +31,6 @@ defineProps<{ app: MerchantApp }>()
         {{ app.name }}
       </RouterLink>
     </h3>
-    <p class="mt-1 line-clamp-2 min-h-10 text-[13px] leading-relaxed text-muted-foreground">{{ app.description }}</p>
     <div class="relative z-[1] mt-4 flex items-center justify-between border-t border-border pt-3.5">
       <OrderNumber :value="app.appId" muted />
       <span class="flex items-center gap-1 text-xs text-muted-foreground">

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { ArrowLeft, ArrowRight, Check, KeyRound, Webhook, X } from '@lucide/vue'
+import { ArrowLeft, ArrowRight, KeyRound, Webhook } from '@lucide/vue'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
@@ -12,7 +12,7 @@ import CopyButton from '@/components/ui/CopyButton.vue'
 import DescriptionList from '@/components/ui/DescriptionList.vue'
 import { useAsync } from '@/composables/useAsync'
 import { api } from '@/services/api'
-import { API_KEY_STATUS, API_PERMISSIONS, APP_ENV } from '@/utils/dictionaries'
+import { API_KEY_STATUS, appEnvMeta, appStatusMeta } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 
 const route = useRoute()
@@ -20,7 +20,9 @@ const appId = computed(() => String(route.params.appId))
 const detail = useAsync(() => api.apps.get(appId.value))
 const keys = useAsync(() => api.keys.list(appId.value))
 const hook = useAsync(() => api.webhooks.getConfig(appId.value))
-const a = computed(() => detail.data.value)
+const a = computed(() => detail.data.value?.app ?? null)
+const envMeta = computed(() => appEnvMeta(a.value?.env))
+const statusMeta = computed(() => appStatusMeta(a.value?.status))
 
 const activeKeys = computed(() => (keys.data.value ?? []).filter((k) => ['ACTIVE', 'EXPIRING', 'PENDING'].includes(k.status)))
 
@@ -28,9 +30,8 @@ const items = computed(() =>
   a.value
     ? [
         { key: 'appId', label: 'AppID', value: a.value.appId },
-        { key: 'env', label: '环境', value: APP_ENV[a.value.env].label },
+        { key: 'env', label: '环境', value: envMeta.value.label },
         { key: 'createdAt', label: '创建时间', value: formatDateTime(a.value.createdAt) },
-        { key: 'description', label: '应用描述', value: a.value.description },
       ]
     : [],
 )
@@ -48,10 +49,8 @@ const items = computed(() =>
             </Button>
             <h1 v-if="a" class="text-xl font-semibold tracking-tight">{{ a.name }}</h1>
             <Skeleton v-else class="h-7 w-40" />
-            <StatusBadge v-if="a" :tone="APP_ENV[a.env].tone">{{ APP_ENV[a.env].label }}</StatusBadge>
-            <StatusBadge v-if="a" :tone="a.status === 'ACTIVE' ? 'success' : 'neutral'" dot>
-              {{ a.status === 'ACTIVE' ? '已启用' : '已停用' }}
-            </StatusBadge>
+            <StatusBadge v-if="a" :tone="envMeta.tone">{{ envMeta.label }}</StatusBadge>
+            <StatusBadge v-if="a" :tone="statusMeta.tone" dot>{{ statusMeta.label }}</StatusBadge>
           </div>
         </template>
       </PageHeader>
@@ -59,7 +58,7 @@ const items = computed(() =>
       <div class="grid gap-5 xl:grid-cols-3">
         <div class="flex flex-col gap-5 xl:col-span-2">
           <Card title="基本信息">
-            <div v-if="!a" class="grid gap-4 sm:grid-cols-2"><Skeleton v-for="i in 4" :key="i" class="h-10" /></div>
+            <div v-if="!a" class="grid gap-4 sm:grid-cols-2"><Skeleton v-for="i in 3" :key="i" class="h-10" /></div>
             <DescriptionList v-else :items="items" :cols="2">
               <template #appId="{ item }">
                 <span class="flex items-center gap-1 font-mono text-[13px]">{{ item.value }}<CopyButton :value="item.value!" label="复制 AppID" /></span>
@@ -67,32 +66,6 @@ const items = computed(() =>
             </DescriptionList>
           </Card>
 
-          <Card title="接口权限" description="权限由平台根据签约产品开通，如需调整请联系客户经理。">
-            <ul v-if="a" class="grid gap-2 sm:grid-cols-2">
-              <li
-                v-for="p in API_PERMISSIONS"
-                :key="p.key"
-                class="flex items-start gap-3 rounded-lg border border-border p-3"
-                :class="a.permissions.includes(p.key) ? '' : 'opacity-60'"
-              >
-                <span
-                  class="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full"
-                  :class="a.permissions.includes(p.key) ? 'bg-success-soft text-success' : 'bg-muted text-muted-foreground'"
-                >
-                  <Check v-if="a.permissions.includes(p.key)" class="size-3" aria-hidden="true" />
-                  <X v-else class="size-3" aria-hidden="true" />
-                </span>
-                <div>
-                  <p class="text-[13px] font-medium">
-                    {{ p.label }}
-                    <span class="sr-only">{{ a.permissions.includes(p.key) ? '（已开通）' : '（未开通）' }}</span>
-                  </p>
-                  <p class="font-mono text-xs text-muted-foreground">{{ p.key }}</p>
-                </div>
-              </li>
-            </ul>
-            <Skeleton v-else class="h-32" />
-          </Card>
         </div>
 
         <div class="flex flex-col gap-5">

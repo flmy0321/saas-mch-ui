@@ -15,12 +15,13 @@ import Skeleton from '@/components/ui/Skeleton.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import { useAsync } from '@/composables/useAsync'
 import { useAppPicker } from '@/composables/useAppPicker'
+import AppPickerStatus from '@/components/business/AppPickerStatus.vue'
 import { api } from '@/services/api'
 import { webhookEventLabel } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 import type { WebhookEventType } from '@/types'
 
-const { options, appId } = useAppPicker()
+const { apps, options, appId } = useAppPicker()
 const config = useAsync(() => (appId.value ? api.webhooks.getConfig(appId.value) : Promise.resolve(null)), { watch: appId })
 
 const cfg = computed(() => config.data.value)
@@ -110,6 +111,7 @@ function reset() {
     <PageHeader title="Webhook 配置" description="交易状态变化时，平台会向回调地址发送 POST 请求。返回 HTTP 2xx 视为成功，否则按退避策略最多重试 8 次。">
       <template #actions>
         <Select v-model="appId" :options="options" aria-label="选择应用" class="w-60" />
+        <AppPickerStatus :apps="apps" />
         <Button :as="RouterLink" :to="{ path: '/developer/deliveries', query: { appId } }">通知记录<ArrowRight aria-hidden="true" /></Button>
       </template>
     </PageHeader>

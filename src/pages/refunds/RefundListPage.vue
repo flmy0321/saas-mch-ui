@@ -17,7 +17,7 @@ import { buildRefundColumns } from './refundColumns'
 import { api } from '@/services/api'
 import { REFUND_STATUS, toOptions } from '@/utils/dictionaries'
 import { formatNumber } from '@/utils/format'
-import type { Refund, RefundQuery, RefundStatus } from '@/types'
+import type { RefundQuery, RefundStatus, RefundView } from '@/types'
 
 const router = useRouter()
 const filters = useQueryFilters({
@@ -97,11 +97,11 @@ const columns = buildRefundColumns({ sortable: true })
         :data="list.data.value?.items ?? []"
         :loading="list.loading.value"
         :error="list.error.value"
-        :row-key="(r: Refund) => r.id"
+        :row-key="(r: RefundView) => r.id"
         clickable
         empty-title="没有符合条件的退款"
         empty-description="尝试调整筛选条件后重新查询。"
-        @row-click="(r: Refund) => router.push(`/refunds/${r.id}`)"
+        @row-click="(r: RefundView) => router.push(`/refunds/${r.id}`)"
         @retry="list.reload()"
       >
         <template #empty-actions>

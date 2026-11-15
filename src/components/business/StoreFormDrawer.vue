@@ -7,9 +7,9 @@ import FormField from '@/components/ui/FormField.vue'
 import Input from '@/components/ui/Input.vue'
 import Switch from '@/components/ui/Switch.vue'
 import { api } from '@/services/api'
-import type { Store, StoreInput } from '@/types'
+import type { Store, StoreInput, StoreView } from '@/types'
 
-const props = defineProps<{ store?: Store | null }>()
+const props = defineProps<{ store?: StoreView | null }>()
 const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ saved: [store: Store] }>()
 
@@ -22,7 +22,14 @@ const isEdit = computed(() => !!props.store)
 watch(open, (v) => {
   if (!v) return
   submitted.value = false
-  Object.assign(form, props.store ? { ...props.store } : empty())
+  // 门店写入仍为旧模型；0.1 视图不含地址/联系人，编辑时需重新填写，不用视图外字段预填
+  const s = props.store
+  Object.assign(
+    form,
+    s
+      ? { ...empty(), name: s.name, merchantStoreNo: s.merchantStoreNo ?? '', status: s.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE' }
+      : empty(),
+  )
 })
 
 const active = computed({

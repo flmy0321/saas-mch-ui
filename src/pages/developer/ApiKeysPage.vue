@@ -15,12 +15,13 @@ import CopyButton from '@/components/ui/CopyButton.vue'
 import Checkbox from '@/components/ui/Checkbox.vue'
 import { useAsync } from '@/composables/useAsync'
 import { useAppPicker } from '@/composables/useAppPicker'
+import AppPickerStatus from '@/components/business/AppPickerStatus.vue'
 import { api } from '@/services/api'
 import { API_KEY_STATUS } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 import type { ApiKey, CreatedApiKey } from '@/types'
 
-const { options, appId, current } = useAppPicker()
+const { apps, options, appId, current } = useAppPicker()
 const keys = useAsync(() => (appId.value ? api.keys.list(appId.value) : Promise.resolve([])), { watch: appId })
 
 const creating = ref(false)
@@ -117,6 +118,7 @@ const columns: ColumnDef<ApiKey>[] = [
     <PageHeader title="API 密钥" description="密钥用于服务端调用开放接口时的签名认证。请妥善保管，切勿在客户端或代码仓库中暴露。">
       <template #actions>
         <Select v-model="appId" :options="options" aria-label="选择应用" class="w-60" />
+        <AppPickerStatus :apps="apps" />
         <Button variant="primary" :loading="creating" :disabled="!appId" @click="createKey"><Plus aria-hidden="true" />创建密钥</Button>
       </template>
     </PageHeader>

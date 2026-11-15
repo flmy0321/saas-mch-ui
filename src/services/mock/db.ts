@@ -7,8 +7,8 @@ import type {
   ApiKey,
   CurrentUser,
   LoginSession,
-  Merchant,
-  MerchantApp,
+  AppView,
+  MerchantProfile,
   Notification,
   Payment,
   PaymentChannel,
@@ -106,17 +106,10 @@ export function startOfDay(ms: number) {
 /* 商户、用户                                                           */
 /* ------------------------------------------------------------------ */
 
-export const merchant: Merchant = {
+export const merchant: MerchantProfile = {
   merchantNo: 'M10008812',
   name: '杭州云栖优选零售有限公司',
-  shortName: '云栖优选',
   status: 'ACTIVE',
-  legalName: '杭州云栖优选零售有限公司',
-  creditCode: '91330106MA2****7XK',
-  industry: '零售 / 便利店',
-  contactEmail: 'finance@yunqi-mart.example',
-  contactPhone: '0571-8****6622',
-  address: '浙江省杭州市西湖区文三路 398 号',
   createdAt: iso(NOW - 420 * DAY),
 }
 
@@ -561,46 +554,38 @@ for (const p of payments) recomputePayment(p)
 /* 应用、密钥、Webhook                                                   */
 /* ------------------------------------------------------------------ */
 
-export const apps: MerchantApp[] = [
+export const apps: AppView[] = [
   {
     id: 'app_1',
     appId: 'app_9f3c2a71d40e8b15',
     name: '云栖优选收银系统',
-    description: '门店 POS 收银与线上小程序统一下单',
     env: 'production',
     status: 'ACTIVE',
     createdAt: iso(NOW - 380 * DAY),
-    permissions: ['payment.create', 'payment.query', 'payment.close', 'refund.create', 'refund.query'],
   },
   {
     id: 'app_2',
     appId: 'app_51be07c6a92f3d48',
     name: '会员小程序',
-    description: '会员商城与积分兑换业务',
     env: 'production',
     status: 'ACTIVE',
     createdAt: iso(NOW - 160 * DAY),
-    permissions: ['payment.create', 'payment.query', 'refund.query'],
   },
   {
     id: 'app_3',
     appId: 'app_sbx_7d21e4f09c3a',
     name: '联调测试应用',
-    description: '开发联调与回归测试使用',
     env: 'sandbox',
     status: 'ACTIVE',
     createdAt: iso(NOW - 40 * DAY),
-    permissions: ['payment.create', 'payment.query', 'payment.close', 'refund.create', 'refund.query'],
   },
   {
     id: 'app_4',
     appId: 'app_c08a3e5b6f1d9274',
     name: '旧版自助点餐',
-    description: '已下线的自助点餐终端',
     env: 'production',
     status: 'DISABLED',
     createdAt: iso(NOW - 520 * DAY),
-    permissions: ['payment.create', 'payment.query'],
   },
 ]
 

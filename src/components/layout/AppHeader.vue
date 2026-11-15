@@ -55,7 +55,7 @@ function switchEnv(next: 'production' | 'sandbox') {
           class="flex h-9 min-w-0 items-center gap-2 rounded-md px-2 text-left hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
         >
           <span class="hidden size-6 shrink-0 items-center justify-center rounded bg-muted text-[11px] font-semibold sm:flex">
-            {{ merchant?.shortName.slice(0, 1) }}
+            {{ merchant?.name.slice(0, 1) }}
           </span>
           <span class="max-w-[42vw] truncate text-[13px] font-medium sm:max-w-56">{{ merchant?.name ?? '加载中…' }}</span>
           <span

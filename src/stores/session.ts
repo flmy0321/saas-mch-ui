@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
 import { api } from '@/services/api'
 import { hasAuthLock, tokenStorage, withAuthLock } from '@/services/auth/token'
-import type { CurrentUser, LoginInput, Merchant, Notification, Store } from '@/types'
+import type { CurrentUser, LoginInput, MerchantProfile, Notification, Store } from '@/types'
 
 /**
  * 登录状态机：
@@ -23,7 +23,7 @@ let selectionToken: string | null = null
 
 export const useSessionStore = defineStore('session', () => {
   const user = ref<CurrentUser | null>(null)
-  const merchant = ref<Merchant | null>(null)
+  const merchant = ref<MerchantProfile | null>(null)
   const stores = ref<Store[]>([])
   const notifications = ref<Notification[]>([])
   /** 本标签页当前使用的客户端登录 generation；用于丢弃过期的异步结果 */
@@ -50,7 +50,7 @@ export const useSessionStore = defineStore('session', () => {
     ])
     if (!isCurrent(gen)) return
     if (u.status === 'fulfilled') user.value = u.value
-    if (m.status === 'fulfilled') merchant.value = m.value
+    if (m.status === 'fulfilled') merchant.value = m.value.merchant
     if (s.status === 'fulfilled') stores.value = s.value
     if (n.status === 'fulfilled') notifications.value = n.value
   }

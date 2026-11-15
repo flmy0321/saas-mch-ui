@@ -19,7 +19,8 @@ const KNOWN_CODES = new Set([
 ])
 
 export type RefundWriteResult =
-  | { kind: 'LOCATED'; refund: Refund }
+  /** 只携带退款 id：写响应（旧模型）与精确查询（038 视图）结构不同，后续展示一律重新读取退款详情 */
+  | { kind: 'LOCATED'; refundId: string }
   | { kind: 'UNKNOWN'; reason: string; error?: ApiError }
   | { kind: 'AUTH_FAILED'; error: ApiError }
   | { kind: 'REJECTED'; error: ApiError }
@@ -76,7 +77,7 @@ export function refundMatches(refund: Refund, expect: Pick<CreateRefundInput, 'p
 export function classifySuccess(body: unknown, input: CreateRefundInput): RefundWriteResult {
   if (!isValidRefund(body)) return { kind: 'UNKNOWN', reason: '响应不是合法的退款资源' }
   if (!refundMatches(body, input)) return { kind: 'UNKNOWN', reason: '响应资源与本次请求不一致' }
-  return { kind: 'LOCATED', refund: body }
+  return { kind: 'LOCATED', refundId: body.id }
 }
 
 /** 失败（reject）分支：优先级 1 / 4 / 5 / 6 */

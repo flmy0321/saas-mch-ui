@@ -12,41 +12,17 @@ import DescriptionList from '@/components/ui/DescriptionList.vue'
 import CopyButton from '@/components/ui/CopyButton.vue'
 import MoneyDisplay from '@/components/business/MoneyDisplay.vue'
 import RefundStatusBadge from '@/components/business/RefundStatusBadge.vue'
-import ChannelBadge from '@/components/business/ChannelBadge.vue'
-import TransactionTimeline, { type TimelineStep } from '@/components/business/TransactionTimeline.vue'
 import WebhookDeliveryList from '@/components/business/WebhookDeliveryList.vue'
 import { useAsync } from '@/composables/useAsync'
 import { api } from '@/services/api'
-import { refundStatusMeta } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 
 const route = useRoute()
 const id = computed(() => String(route.params.id))
 const detail = useAsync(() => api.refunds.get(id.value))
 const deliveries = useAsync(() => api.webhooks.deliveriesFor(id.value))
-const r = computed(() => detail.data.value)
+const r = computed(() => detail.data.value?.refund ?? null)
 const notFound = computed(() => detail.error.value?.includes('不存在'))
-
-const steps = computed<TimelineStep[]>(() => {
-  const x = r.value
-  if (!x) return []
-  const last = x.progress.length - 1
-  return x.progress.map((e, i) => ({
-    title: refundStatusMeta(e.status).label,
-    at: e.at,
-    note: e.note,
-    state:
-      e.status === 'SUCCESS'
-        ? 'done'
-        : e.status === 'FAILED' || e.status === 'CLOSED'
-          ? 'failed'
-          : e.status === 'SUSPENDED'
-            ? 'current'
-            : i === last
-              ? 'current'
-              : 'done',
-  }))
-})
 
 const items = computed(() => {
   const x = r.value
@@ -55,13 +31,11 @@ const items = computed(() => {
     { key: 'id', label: '平台退款编号', value: x.id },
     { key: 'merchantRefundNo', label: '商户退款编号', value: x.merchantRefundNo },
     { key: 'paymentId', label: '原支付订单号', value: x.paymentId },
-    { key: 'merchantOrderNo', label: '原商户订单号', value: x.merchantOrderNo },
     { key: 'store', label: '门店', value: x.storeName },
-    { key: 'channel', label: '退款渠道', value: x.channel },
-    { key: 'reason', label: '退款原因', value: x.reason },
+    { key: 'reason', label: '退款原因', value: x.reason ?? '—' },
     { key: 'createdAt', label: '申请时间', value: formatDateTime(x.createdAt) },
-    { key: 'updatedAt', label: '最近更新', value: formatDateTime(x.updatedAt) },
-    { key: 'finishedAt', label: '完成时间', value: formatDateTime(x.finishedAt) },
+    // finishedAt 仅为 SUCCESS/FAILED/CLOSED 的来源终态时间，其他状态或来源为空时为 null，不推算
+    { key: 'finishedAt', label: '终态时间', value: x.finishedAt ? formatDateTime(x.finishedAt) : '—' },
   ]
 })
 
@@ -73,7 +47,7 @@ const statusHint = computed(() => {
     case 'SUSPENDED':
       return '退款被渠道挂起，通常因用户账户状态异常，平台会持续重试，如长时间未恢复请联系客服。'
     case 'FAILED':
-      return r.value?.failReason ? `退款失败：${r.value.failReason}` : '退款失败，可重新发起退款。'
+      return '退款失败，失败原因不在本视图中提供，可在核实后重新发起退款。'
     default:
       return ''
   }
@@ -125,13 +99,12 @@ const statusHint = computed(() => {
           </Card>
 
           <Card title="退款信息">
-            <div v-if="!r" class="grid gap-4 sm:grid-cols-2"><Skeleton v-for="i in 8" :key="i" class="h-10" /></div>
+            <div v-if="!r" class="grid gap-4 sm:grid-cols-2"><Skeleton v-for="i in 6" :key="i" class="h-10" /></div>
             <DescriptionList v-else :items="items" :cols="2">
               <template #id="{ item }">
                 <span class="flex items-center gap-1 font-mono text-[13px]">{{ item.value }}<CopyButton :value="item.value!" /></span>
               </template>
-              <template #merchantRefundNo="{ item }"><span class="font-mono text-[13px]">{{ item.value }}</span></template>
-              <template #merchantOrderNo="{ item }">
+              <template #merchantRefundNo="{ item }">
                 <span v-if="item.value" class="font-mono text-[13px]">{{ item.value }}</span>
                 <span v-else class="text-muted-foreground">—</span>
               </template>
@@ -142,18 +115,13 @@ const statusHint = computed(() => {
                 <RouterLink v-if="r.storeId" :to="`/stores/${r.storeId}`" class="text-primary hover:underline">{{ r.storeName ?? r.storeId }}</RouterLink>
                 <span v-else class="text-muted-foreground">{{ r.storeName ?? '—' }}</span>
               </template>
-              <template #channel><ChannelBadge :channel="r.channel" /></template>
             </DescriptionList>
           </Card>
 
-          <Card title="Webhook 通知" description="与该退款相关的事件通知" body-class="p-0">
-            <WebhookDeliveryList :items="deliveries.data.value ?? []" :loading="deliveries.loading.value" :error="deliveries.error.value" @retry="deliveries.reload()" />
-          </Card>
         </div>
 
-        <Card title="处理进度">
-          <div v-if="!r" class="flex flex-col gap-4"><Skeleton v-for="i in 3" :key="i" class="h-10" /></div>
-          <TransactionTimeline v-else :steps="steps" />
+        <Card title="Webhook 通知" description="与该退款相关的事件通知" body-class="p-0">
+          <WebhookDeliveryList :items="deliveries.data.value ?? []" :loading="deliveries.loading.value" :error="deliveries.error.value" @retry="deliveries.reload()" />
         </Card>
       </div>
     </template>

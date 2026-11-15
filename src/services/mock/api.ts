@@ -17,7 +17,17 @@ import type {
   Store,
   TrendPoint,
 } from '@/types'
-import { PAYMENT_LIST_VIEW_VERSION } from '@/types'
+import {
+  APP_VIEW_VERSION,
+  MERCHANT_PROFILE_VIEW_VERSION,
+  PAYMENT_DETAIL_VIEW_VERSION,
+  PAYMENT_LIST_VIEW_VERSION,
+  REFUND_VIEW_VERSION,
+  STORE_VIEW_VERSION,
+  type AppView,
+  type RefundView,
+  type StoreView,
+} from '@/types'
 import { ApiError, type ApiErrorInit, type MerchantApi } from '@/services/api/types'
 import { fenToAmount, isAmountInput, toFen } from '@/utils/money'
 import { delay, getMockRefundFault } from './control'
@@ -117,6 +127,40 @@ function paymentListItemDto(p: PaymentRow): PaymentListItem {
 function refundDto(r: RefundRow): Refund {
   const { scope: _scope, ...rest } = r
   return { ...rest, amount: fenToAmount(r.amount) }
+}
+
+const TERMINAL_REFUND = new Set(['SUCCESS', 'FAILED', 'CLOSED'])
+
+/** 退款精简视图（协议 3.8.4）：finishedAt 只在 SUCCESS/FAILED/CLOSED 取对应终态时间，其他状态为 null */
+function refundViewDto(r: RefundRow): RefundView {
+  return {
+    id: r.id,
+    merchantRefundNo: r.merchantRefundNo,
+    paymentId: r.paymentId,
+    storeId: r.storeId,
+    storeName: r.storeName,
+    amount: fenToAmount(r.amount),
+    status: r.status,
+    reason: r.reason,
+    createdAt: r.createdAt,
+    finishedAt: TERMINAL_REFUND.has(r.status) ? r.finishedAt : null,
+  }
+}
+
+function storeViewDto(s: Store): StoreView {
+  return { id: s.id, storeNo: s.storeNo, merchantStoreNo: s.merchantStoreNo || null, name: s.name, status: s.status, createdAt: s.createdAt }
+}
+
+function viewPage<V extends string, T>(viewVersion: V, page: Paginated<T>) {
+  return { viewVersion, items: page.items, total: page.total, page: page.page, pageSize: page.pageSize, asOf: asOf() }
+}
+
+/** 协议 1.4 / 3.8.3：page 非整数或越界报 VALIDATION；pageSize 非整数报 VALIDATION，整数截断到 1–100 */
+function assertPageParams(page: unknown, pageSize: unknown) {
+  if (page !== undefined && !(Number.isInteger(page) && (page as number) >= 1 && (page as number) <= 1_000_000)) {
+    fail('page 参数不合法', 'VALIDATION', 400)
+  }
+  if (pageSize !== undefined && !Number.isInteger(pageSize)) fail('pageSize 参数不合法', 'VALIDATION', 400)
 }
 
 /* ------------------------------------------------------------------ */
@@ -420,7 +464,7 @@ function issueKey(appId: string): CreatedApiKey {
   const app = apps.find((a) => a.appId === appId)
   if (!app) fail('应用不存在', 'NOT_FOUND', 404)
   if (app.status !== 'ACTIVE') fail('应用已停用，无法创建密钥', 'INVALID_STATUS', 409)
-  const plain = newSecret(app.env)
+  const plain = newSecret(app.env === 'sandbox' ? 'sandbox' : 'production')
   const now = new Date().toISOString()
   const key: ApiKey = {
     id: `k_${randomHex(8)}`,
@@ -494,7 +538,8 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
         }
         return view
       }),
-    get: (id) => delay(() => paymentDto(findPayment(id))),
+    get: (id) =>
+      delay(() => ({ viewVersion: PAYMENT_DETAIL_VIEW_VERSION, payment: paymentListItemDto(findPayment(id)), asOf: asOf() })),
     refundable: (id) => delay(() => refundableInfo(findPayment(id))),
     exportCsv: (q) =>
       delay(() => {
@@ -515,22 +560,24 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
   refunds: {
     list: (q) =>
       delay(() => {
+        assertPageParams(q.page, q.pageSize)
         const page = paginate(sortRows(filterRefunds(q), q.sortBy, q.sortOrder), q.page, q.pageSize)
-        return { ...page, items: page.items.map(refundDto) }
+        return viewPage(REFUND_VIEW_VERSION, { ...page, items: page.items.map(refundViewDto) })
       }),
     get: (id) =>
       delay(() => {
         const r = refunds.find((x) => x.id === id)
         if (!r) fail('退款记录不存在', 'NOT_FOUND', 404)
-        return refundDto(r)
+        return { viewVersion: REFUND_VIEW_VERSION, refund: refundViewDto(r), asOf: asOf() }
       }),
     create: (input) => createRefund(input),
     findByMerchantRefundNo: (paymentId, merchantRefundNo) =>
       delay(() => {
-        const p = findPayment(paymentId)
-        const r = findInScope(p.scope, merchantRefundNo.trim())
-        if (!r) fail('未找到该商户退款编号对应的退款', 'NOT_FOUND', 404, { authoritative: true })
-        return refundDto(r)
+        // 协议 3.8.4：支付不存在与退款不存在统一 404 NOT_FOUND，不区分，不带 authoritative
+        const p = payments.find((x) => x.id === paymentId)
+        const r = p ? findInScope(p.scope, merchantRefundNo) : undefined
+        if (!r || r.paymentId !== paymentId) fail('资源不存在或不可见', 'NOT_FOUND', 404)
+        return { viewVersion: REFUND_VIEW_VERSION, refund: refundViewDto(r), asOf: asOf() }
       }),
   },
 
@@ -578,16 +625,17 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
   stores: {
     list: (q) =>
       delay(() => {
+        assertPageParams(q.page, q.pageSize)
         const kw = q.keyword?.trim()
-        const rows = stores.filter((s) => {
+        const rows = stores.map(storeViewDto).filter((s) => {
           if (q.status && s.status !== q.status) return false
-          if (kw && !s.name.includes(kw) && !s.storeNo.includes(kw) && !s.merchantStoreNo.includes(kw)) return false
+          if (kw && !s.name.includes(kw) && !s.storeNo.includes(kw) && !(s.merchantStoreNo !== null && s.merchantStoreNo.includes(kw))) return false
           return true
         })
-        return paginate(sortRows(rows, q.sortBy ?? 'createdAt', q.sortOrder ?? 'desc'), q.page, q.pageSize)
+        return viewPage(STORE_VIEW_VERSION, paginate(sortRows(rows, q.sortBy ?? 'createdAt', q.sortOrder ?? 'desc'), q.page, q.pageSize))
       }),
     all: () => delay(() => stores, 120),
-    get: (id) => delay(() => findStore(id)),
+    get: (id) => delay(() => ({ viewVersion: STORE_VIEW_VERSION, store: storeViewDto(findStore(id)), asOf: asOf() })),
     stats: (id) =>
       delay(() => {
         findStore(id)
@@ -638,12 +686,23 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
   },
 
   apps: {
-    list: () => delay(() => apps),
+    list: (q) =>
+      delay(() => {
+        assertPageParams(q.page, q.pageSize)
+        if (q.sortBy !== undefined && q.sortBy !== 'createdAt') fail('sortBy 参数不合法', 'VALIDATION', 400)
+        if (q.sortOrder !== undefined && q.sortOrder !== 'asc' && q.sortOrder !== 'desc') fail('sortOrder 参数不合法', 'VALIDATION', 400)
+        const dir = q.sortOrder === 'asc' ? 1 : -1
+        // 稳定排序：createdAt 相同时按 appId 同方向
+        const rows = [...apps].sort((a, b) =>
+          a.createdAt !== b.createdAt ? (a.createdAt > b.createdAt ? dir : -dir) : a.appId === b.appId ? 0 : a.appId > b.appId ? dir : -dir,
+        )
+        return viewPage<typeof APP_VIEW_VERSION, AppView>(APP_VIEW_VERSION, paginate(rows, q.page, q.pageSize))
+      }),
     get: (appId) =>
       delay(() => {
         const a = apps.find((x) => x.appId === appId)
         if (!a) fail('应用不存在', 'NOT_FOUND', 404)
-        return a
+        return { viewVersion: APP_VIEW_VERSION, app: a, asOf: asOf() }
       }),
   },
 
@@ -707,7 +766,7 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
   },
 
   account: {
-    merchant: () => delay(() => merchant),
+    merchant: () => delay(() => ({ viewVersion: MERCHANT_PROFILE_VIEW_VERSION, merchant, asOf: asOf() })),
     me: () => delay(() => currentUser, 150),
     updateMe: (input) =>
       delay(() => {

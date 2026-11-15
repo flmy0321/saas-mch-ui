@@ -10,7 +10,7 @@ import Textarea from '@/components/ui/Textarea.vue'
 import RefundSummaryCard from './RefundSummaryCard.vue'
 import { api } from '@/services/api'
 import { ApiError } from '@/services/api/types'
-import { classifyFailure, classifySuccess, isValidRefund, refundMatches, type RefundWriteResult } from '@/services/refund/classify'
+import { classifyFailure, classifySuccess, type RefundWriteResult } from '@/services/refund/classify'
 import {
   BLOCKING_PHASES,
   RecoveryUnavailableError,
@@ -24,13 +24,14 @@ import {
   type RecoveryScope,
 } from '@/services/refund/recovery'
 import { useSessionStore } from '@/stores/session'
-import { compareAmount, fenToAmount, formatMoney, isAmountInput, isPositiveAmount, normalizeAmount, toFen } from '@/utils/money'
+import { amountEquals, compareAmount, fenToAmount, formatMoney, isAmountInput, isPositiveAmount, normalizeAmount, toFen } from '@/utils/money'
 import { formatDateTime } from '@/utils/format'
-import type { Payment, Refund, RefundableInfo } from '@/types'
+import type { Payment, RefundableInfo } from '@/types'
 
-const props = defineProps<{ payment: Payment }>()
+/** 仅需订单 id；退款写入链路仍使用旧模型，未随 037/038 切换 */
+const props = defineProps<{ payment: Pick<Payment, 'id'> }>()
 const open = defineModel<boolean>('open', { default: false })
-const emit = defineEmits<{ created: [refund: Refund] }>()
+const emit = defineEmits<{ created: [refundId: string] }>()
 
 const session = useSessionStore()
 
@@ -172,10 +173,10 @@ async function applyResult(result: RefundWriteResult, current: RecoveryContext) 
   const no = current.merchantRefundNo
   switch (result.kind) {
     case 'LOCATED': {
-      ctx.value = await patchRecovery(s, no, { phase: 'LOCATED', refundId: result.refund.id, note: null })
-      toast.success('退款申请已受理', { description: `退款单号 ${result.refund.id}，处理结果以退款详情为准` })
+      ctx.value = await patchRecovery(s, no, { phase: 'LOCATED', refundId: result.refundId, note: null })
+      toast.success('退款申请已受理', { description: `退款单号 ${result.refundId}，处理结果以退款详情为准` })
       open.value = false
-      emit('created', result.refund)
+      emit('created', result.refundId)
       return
     }
     case 'REJECTED': {
@@ -259,8 +260,9 @@ async function queryResult(silent = false) {
   const now = new Date().toISOString()
   try {
     const found = await api.refunds.findByMerchantRefundNo(c.paymentId, c.merchantRefundNo)
-    if (isValidRefund(found) && refundMatches(found, c)) {
-      await applyResult({ kind: 'LOCATED', refund: found }, c)
+    const r = found.refund
+    if (r.paymentId === c.paymentId && r.merchantRefundNo === c.merchantRefundNo && amountEquals(r.amount, c.amount)) {
+      await applyResult({ kind: 'LOCATED', refundId: r.id }, c)
       return
     }
     ctx.value = await patchRecovery(s, c.merchantRefundNo, { lastCheckedAt: now, note: '查询到的记录与本次申请不一致，请联系客服核实' })

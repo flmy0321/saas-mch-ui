@@ -4,13 +4,13 @@ import OrderNumber from '@/components/business/OrderNumber.vue'
 import MoneyDisplay from '@/components/business/MoneyDisplay.vue'
 import RefundStatusBadge from '@/components/business/RefundStatusBadge.vue'
 import { formatDateTime } from '@/utils/format'
-import type { Refund } from '@/types'
+import type { RefundView } from '@/types'
 
 const muted = (text: string) => h('span', { class: 'text-muted-foreground tabular whitespace-nowrap' }, text)
 
-export function buildRefundColumns(opts: { sortable?: boolean; withPayment?: boolean } = {}): ColumnDef<Refund>[] {
+export function buildRefundColumns(opts: { sortable?: boolean; withPayment?: boolean } = {}): ColumnDef<RefundView>[] {
   const sortable = opts.sortable ?? false
-  const cols: ColumnDef<Refund>[] = [
+  const cols: ColumnDef<RefundView>[] = [
     {
       id: 'id',
       header: '平台退款编号',
@@ -21,7 +21,8 @@ export function buildRefundColumns(opts: { sortable?: boolean; withPayment?: boo
       id: 'merchantRefundNo',
       header: '商户退款编号',
       enableSorting: false,
-      cell: ({ row }) => h(OrderNumber, { value: row.original.merchantRefundNo, muted: true }),
+      cell: ({ row }) =>
+        row.original.merchantRefundNo === null ? muted('—') : h(OrderNumber, { value: row.original.merchantRefundNo, muted: true }),
     },
   ]
   if (opts.withPayment !== false) {

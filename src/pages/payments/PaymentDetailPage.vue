@@ -28,7 +28,7 @@ import { formatDateTime, formatMoney } from '@/utils/format'
 import { isPositiveAmount } from '@/utils/money'
 import { listBlockingFor, subscribeRecovery, type RecoveryContext } from '@/services/refund/recovery'
 import { useSessionStore } from '@/stores/session'
-import type { Refund } from '@/types'
+import type { RefundView } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -39,7 +39,7 @@ const refunds = useAsync(() => api.refunds.list({ paymentId: id.value, page: 1, 
 const info = useAsync(() => api.payments.refundable(id.value))
 const deliveries = useAsync(() => api.webhooks.deliveriesFor(id.value))
 
-const p = computed(() => detail.data.value)
+const p = computed(() => detail.data.value?.payment ?? null)
 const refundOpen = ref(false)
 
 const notFound = computed(() => detail.error.value?.includes('不存在'))
@@ -88,18 +88,14 @@ const refundDisabledReason = computed(() => {
   return ''
 })
 
+/** 仅使用 037 视图中有来源的时间：createdAt、paidAt；失败/关闭时间与原因不在本视图中，不推算 */
 const steps = computed<TimelineStep[]>(() => {
   const x = p.value
   if (!x) return []
   const s: TimelineStep[] = [{ title: '订单创建', at: x.createdAt, state: 'done' }]
-  s.push(
-    x.submittedAt
-      ? { title: '用户提交支付', at: x.submittedAt, state: 'done', note: `${methodLabel(x.method)}` }
-      : { title: '用户提交支付', state: x.status === 'CREATED' ? 'current' : 'pending' },
-  )
-  if (x.status === 'SUCCESS') s.push({ title: '支付成功', at: x.paidAt, state: 'done', note: `实收 ${formatMoney(x.paidAmount)}` })
-  else if (x.status === 'FAILED') s.push({ title: '支付失败', at: x.failedAt, state: 'failed', note: x.failReason })
-  else if (x.status === 'CLOSED') s.push({ title: '订单关闭', at: x.closedAt, state: 'neutral', note: '超时未支付或商户主动关闭' })
+  if (x.status === 'SUCCESS') s.push({ title: '支付成功', at: x.paidAt, state: 'done', note: methodLabel(x.method) })
+  else if (x.status === 'FAILED') s.push({ title: '支付失败', state: 'failed' })
+  else if (x.status === 'CLOSED') s.push({ title: '订单关闭', state: 'neutral' })
   else if (x.status === 'CLOSING') s.push({ title: '关单处理中', state: 'current' })
   else if (x.status === 'PAYING') s.push({ title: '等待支付结果', state: 'current', note: x.expireAt ? `订单将于 ${formatDateTime(x.expireAt)} 过期` : undefined })
   else if (x.status === 'CREATED') s.push({ title: '等待用户支付', state: 'pending', note: x.expireAt ? `订单将于 ${formatDateTime(x.expireAt)} 过期` : undefined })
@@ -109,7 +105,7 @@ const steps = computed<TimelineStep[]>(() => {
       title: `退款 ${formatMoney(r.amount)}`,
       at: r.finishedAt ?? r.createdAt,
       state: r.status === 'SUCCESS' ? 'done' : r.status === 'FAILED' || r.status === 'CLOSED' ? 'failed' : 'current',
-      note: `${r.id} · ${r.reason}`,
+      note: r.reason ? `${r.id} · ${r.reason}` : r.id,
     })
   }
   return s
@@ -121,26 +117,27 @@ const baseItems = computed(() => {
   return [
     { key: 'id', label: '平台支付订单号', value: x.id },
     { key: 'merchantOrderNo', label: '商户订单号', value: x.merchantOrderNo },
-    { key: 'subject', label: '商品描述', value: x.subject },
+    { key: 'subject', label: '商品描述', value: x.subject ?? '—' },
     { key: 'store', label: '门店', value: x.storeName },
     { key: 'channel', label: '支付渠道', value: x.channel },
     { key: 'method', label: '支付方式', value: methodLabel(x.method) },
     { key: 'source', label: '订单来源', value: paymentSourceLabel(x.source) },
     { key: 'coreStatus', label: '核心状态', value: x.coreStatus || '—' },
     { key: 'createdAt', label: '创建时间', value: formatDateTime(x.createdAt) },
-    { key: 'paidAt', label: '支付时间', value: formatDateTime(x.paidAt) },
+    { key: 'paidAt', label: '支付时间', value: x.paidAt ? formatDateTime(x.paidAt) : '—' },
+    { key: 'expireAt', label: '过期时间', value: x.expireAt ? formatDateTime(x.expireAt) : '—' },
   ]
 })
 
 const refundColumns = buildRefundColumns({ withPayment: false })
 
-function onRefundCreated(r: Refund) {
+function onRefundCreated(refundId: string) {
   readRecovery()
   detail.reload()
   refunds.reload()
   info.reload()
   deliveries.reload()
-  router.push(`/refunds/${r.id}`)
+  router.push(`/refunds/${refundId}`)
 }
 </script>
 
@@ -203,10 +200,6 @@ function onRefundCreated(r: Refund) {
               </div>
               <dl class="flex flex-wrap gap-x-8 gap-y-3 text-[13px]">
                 <div>
-                  <dt class="text-muted-foreground">实收金额</dt>
-                  <dd class="mt-1 font-medium tabular">{{ formatMoney(p.paidAmount) }}</dd>
-                </div>
-                <div>
                   <dt class="text-muted-foreground">已退款</dt>
                   <dd class="mt-1 font-medium tabular">{{ formatMoney(p.refundedAmount) }}</dd>
                 </div>
@@ -216,12 +209,6 @@ function onRefundCreated(r: Refund) {
                 </div>
               </dl>
             </div>
-            <p
-              v-if="p?.status === 'FAILED' && p.failReason"
-              class="mt-4 rounded-md border border-danger/20 bg-danger-soft px-3 py-2 text-[13px] text-danger"
-            >
-              失败原因：{{ p.failReason }}
-            </p>
           </Card>
 
           <Card title="订单信息">
@@ -250,10 +237,10 @@ function onRefundCreated(r: Refund) {
               :loading="refunds.loading.value"
               :error="refunds.error.value"
               :skeleton-rows="2"
-              :row-key="(r: Refund) => r.id"
+              :row-key="(r: RefundView) => r.id"
               clickable
               empty-title="暂无退款记录"
-              @row-click="(r: Refund) => router.push(`/refunds/${r.id}`)"
+              @row-click="(r: RefundView) => router.push(`/refunds/${r.id}`)"
               @retry="refunds.reload()"
             />
           </Card>

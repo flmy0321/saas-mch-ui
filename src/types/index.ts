@@ -139,6 +139,105 @@ export interface PaymentListPage {
   asOf: string
 }
 
+/** 支付详情视图（协议 3.1b / 037）：与列表项同一组 22 键，不含六个无来源字段 */
+export const PAYMENT_DETAIL_VIEW_VERSION = 'portal-payment-detail-view/0.1-draft'
+export type PaymentDetailItem = PaymentListItem
+export interface PaymentDetailView {
+  viewVersion: typeof PAYMENT_DETAIL_VIEW_VERSION
+  payment: PaymentDetailItem
+  asOf: string
+}
+
+/* ---------- 038 资源精简视图（协议 3.8） ---------- */
+
+export const MERCHANT_PROFILE_VIEW_VERSION = 'portal-merchant-profile-view/0.1-draft'
+export const STORE_VIEW_VERSION = 'portal-store-view/0.1-draft'
+export const APP_VIEW_VERSION = 'portal-app-view/0.1-draft'
+export const REFUND_VIEW_VERSION = 'portal-refund-view/0.1-draft'
+
+/** 列表包装：恰好 6 键；total 为非负安全整数 */
+export interface ViewPage<V extends string, T> {
+  viewVersion: V
+  items: T[]
+  total: number
+  page: number
+  pageSize: number
+  asOf: string
+}
+
+export type MerchantStatus = Open<'ACTIVE' | 'DISABLED' | 'CLOSED'>
+export interface MerchantProfile {
+  merchantNo: string
+  name: string
+  status: MerchantStatus
+  createdAt: string
+}
+export interface MerchantProfileView {
+  viewVersion: typeof MERCHANT_PROFILE_VIEW_VERSION
+  merchant: MerchantProfile
+  asOf: string
+}
+
+export type StoreViewStatus = Open<'ACTIVE' | 'DISABLED' | 'CLOSED'>
+export interface StoreView {
+  id: string
+  storeNo: string
+  /** 可为 null：核心无此值 */
+  merchantStoreNo: string | null
+  name: string
+  status: StoreViewStatus
+  createdAt: string
+}
+export interface StoreViewSingle {
+  viewVersion: typeof STORE_VIEW_VERSION
+  store: StoreView
+  asOf: string
+}
+export type StoreViewPage = ViewPage<typeof STORE_VIEW_VERSION, StoreView>
+
+export type AppViewStatus = Open<'ACTIVE' | 'DISABLED' | 'REVOKED'>
+export interface AppView {
+  id: string
+  appId: string
+  name: string
+  env: Open<AppEnv>
+  status: AppViewStatus
+  createdAt: string
+}
+export interface AppViewSingle {
+  viewVersion: typeof APP_VIEW_VERSION
+  app: AppView
+  asOf: string
+}
+export type AppViewPage = ViewPage<typeof APP_VIEW_VERSION, AppView>
+export interface AppQuery {
+  page?: number
+  pageSize?: number
+  sortBy?: 'createdAt'
+  sortOrder?: SortOrder
+}
+
+export interface RefundView {
+  id: string
+  /** 可为 null（如非经本门户创建的退款） */
+  merchantRefundNo: string | null
+  paymentId: string
+  storeId: string | null
+  storeName: string | null
+  amount: AmountDecimal
+  status: RefundStatus
+  reason: string | null
+  createdAt: string
+  /** SUCCESS→refundSuccessAt，FAILED→failedAt，CLOSED→closedAt；其他状态 null，来源为空也为 null */
+  finishedAt: string | null
+}
+export interface RefundViewSingle {
+  viewVersion: typeof REFUND_VIEW_VERSION
+  refund: RefundView
+  asOf: string
+}
+export type RefundViewPage = ViewPage<typeof REFUND_VIEW_VERSION, RefundView>
+
 export interface RefundProgressEvent {
   status: RefundStatus
   at: string
@@ -205,19 +304,6 @@ export interface WebhookDelivery {
   isTest: boolean
 }
 
-export type AppStatus = 'ACTIVE' | 'DISABLED'
-
-export interface MerchantApp {
-  id: string
-  appId: string
-  name: string
-  description: string
-  env: AppEnv
-  status: AppStatus
-  createdAt: string
-  permissions: string[]
-}
-
 export type ApiKeyStatus = 'ACTIVE' | 'PENDING' | 'EXPIRING' | 'REVOKED' | 'EXPIRED'
 
 export interface ApiKey {
@@ -244,20 +330,6 @@ export interface WebhookConfig {
   events: WebhookEventType[]
   /** 从未配置为 null */
   updatedAt: string | null
-}
-
-export interface Merchant {
-  merchantNo: string
-  name: string
-  shortName: string
-  status: 'ACTIVE' | 'RESTRICTED'
-  legalName: string
-  creditCode: string
-  industry: string
-  contactEmail: string
-  contactPhone: string
-  address: string
-  createdAt: string
 }
 
 export interface CurrentUser {
@@ -378,7 +450,7 @@ export interface RefundQuery extends PageQuery {
 
 export interface StoreQuery extends PageQuery {
   keyword?: string
-  status?: StoreStatus
+  status?: StoreViewStatus
 }
 
 export interface WebhookDeliveryQuery extends PageQuery {
