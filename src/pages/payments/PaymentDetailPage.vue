@@ -23,7 +23,7 @@ import WebhookDeliveryList from '@/components/business/WebhookDeliveryList.vue'
 import { useAsync } from '@/composables/useAsync'
 import { buildRefundColumns } from '@/pages/refunds/refundColumns'
 import { api } from '@/services/api'
-import { methodLabel, paymentSourceLabel } from '@/utils/dictionaries'
+import { methodLabel, paymentSourceLabel, refundStatusMeta } from '@/utils/dictionaries'
 import { formatDateTime, formatMoney } from '@/utils/format'
 import { isPositiveAmount } from '@/utils/money'
 import { listBlockingFor, subscribeRecovery, type RecoveryContext } from '@/services/refund/recovery'
@@ -100,12 +100,15 @@ const steps = computed<TimelineStep[]>(() => {
   else if (x.status === 'PAYING') s.push({ title: '等待支付结果', state: 'current', note: x.expireAt ? `订单将于 ${formatDateTime(x.expireAt)} 过期` : undefined })
   else if (x.status === 'CREATED') s.push({ title: '等待用户支付', state: 'pending', note: x.expireAt ? `订单将于 ${formatDateTime(x.expireAt)} 过期` : undefined })
   else s.push({ title: '状态未识别', state: 'neutral', note: `当前版本未识别的订单状态 ${x.status}，请以订单查询结果为准` })
+  // 退款节点只表示该退款的“当前状态”，不是状态流转历史；时间只用对应终态的 finishedAt，
+  // 为空或非终态时不显示时间，申请时间单独标注，不以 createdAt 冒充终态时刻
   for (const r of [...(refunds.data.value?.items ?? [])].reverse()) {
+    const terminal = r.status === 'SUCCESS' || r.status === 'FAILED' || r.status === 'CLOSED'
     s.push({
-      title: `退款 ${formatMoney(r.amount)}`,
-      at: r.finishedAt ?? r.createdAt,
+      title: `退款 ${formatMoney(r.amount)} · 当前${refundStatusMeta(r.status).label}`,
+      at: terminal ? r.finishedAt : null,
       state: r.status === 'SUCCESS' ? 'done' : r.status === 'FAILED' || r.status === 'CLOSED' ? 'failed' : 'current',
-      note: r.reason ? `${r.id} · ${r.reason}` : r.id,
+      note: [r.id, `申请时间 ${formatDateTime(r.createdAt)}`, r.reason].filter(Boolean).join(' · '),
     })
   }
   return s

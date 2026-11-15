@@ -3,6 +3,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api } from '@/services/api'
 import { appEnvMeta } from '@/utils/dictionaries'
+import { isConsistentPage, lastPageOf } from '@/utils/page'
 import type { AppView } from '@/types'
 
 const PICKER_PAGE_SIZE = 100
@@ -35,6 +36,7 @@ export function useAppCollection() {
       if (id !== seq) return
       if (total.value !== null && res.total !== total.value) changed.value = '加载期间 App 总数发生变化'
       else if (res.page !== page) changed.value = '加载期间列表页码发生变化'
+      else if (!isConsistentPage(res.total, res.page, res.pageSize, res.items.length)) changed.value = '返回的分页数据与总数不一致'
       const next = new Map(byAppId.value)
       for (const a of res.items) {
         if (next.has(a.appId)) changed.value ??= '跨页出现重复 App'
@@ -43,7 +45,10 @@ export function useAppCollection() {
       byAppId.value = next
       total.value = res.total
       nextPage = page + 1
-      exhausted.value = res.items.length < res.pageSize || page * res.pageSize >= res.total
+      // 只按一致响应的回写页码判断是否到末页；不以“本页行数 < pageSize”推断到底
+      const atLastPage = !changed.value && res.page >= lastPageOf(res.total, res.pageSize)
+      if (atLastPage && next.size !== res.total) changed.value = '已到末页但已加载数量与总数不一致'
+      exhausted.value = atLastPage && !changed.value
     } catch (e) {
       if (id === seq) error.value = e instanceof Error ? e.message : '未知错误'
     } finally {

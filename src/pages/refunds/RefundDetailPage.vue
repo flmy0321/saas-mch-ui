@@ -44,10 +44,11 @@ const statusHint = computed(() => {
     case 'PROCESSING':
     case 'CREATED':
       return '退款正在渠道处理中，通常 1-3 个工作日内完成，结果会通过 Webhook 通知。'
+    // 3.8.4：视图只有状态，没有挂起原因、重试策略或失败原因，不推测也不提示重新发起
     case 'SUSPENDED':
-      return '退款被渠道挂起，通常因用户账户状态异常，平台会持续重试，如长时间未恢复请联系客服。'
+      return '退款已挂起，待核实；挂起期间仍占用该订单的可退额度。'
     case 'FAILED':
-      return '退款失败，失败原因不在本视图中提供，可在核实后重新发起退款。'
+      return '退款失败。'
     default:
       return ''
   }

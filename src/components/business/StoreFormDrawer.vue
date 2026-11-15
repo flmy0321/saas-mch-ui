@@ -7,9 +7,13 @@ import FormField from '@/components/ui/FormField.vue'
 import Input from '@/components/ui/Input.vue'
 import Switch from '@/components/ui/Switch.vue'
 import { api } from '@/services/api'
-import type { Store, StoreInput, StoreView } from '@/types'
+import type { Store, StoreInput } from '@/types'
 
-const props = defineProps<{ store?: StoreView | null }>()
+/**
+ * 仅用于新建门店（写入仍为旧 StoreInput 模型）。
+ * 编辑已关闭：0.1 只读视图不含地址/联系人，门店写契约与完整编辑数据源尚未评审，
+ * 不能从精简视图预填空值或让用户重填后台已有的资料。
+ */
 const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ saved: [store: Store] }>()
 
@@ -17,19 +21,11 @@ const empty = (): StoreInput => ({ name: '', merchantStoreNo: '', address: '', c
 const form = reactive<StoreInput>(empty())
 const submitted = ref(false)
 const saving = ref(false)
-const isEdit = computed(() => !!props.store)
 
 watch(open, (v) => {
   if (!v) return
   submitted.value = false
-  // 门店写入仍为旧模型；0.1 视图不含地址/联系人，编辑时需重新填写，不用视图外字段预填
-  const s = props.store
-  Object.assign(
-    form,
-    s
-      ? { ...empty(), name: s.name, merchantStoreNo: s.merchantStoreNo ?? '', status: s.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE' }
-      : empty(),
-  )
+  Object.assign(form, empty())
 })
 
 const active = computed({
@@ -56,8 +52,8 @@ async function save() {
   saving.value = true
   try {
     const payload: StoreInput = { ...form, name: form.name.trim(), address: form.address.trim() }
-    const saved = props.store ? await api.stores.update(props.store.id, payload) : await api.stores.create(payload)
-    toast.success(isEdit.value ? '门店信息已更新' : '门店已创建', { description: saved.name })
+    const saved = await api.stores.create(payload)
+    toast.success('门店已创建', { description: saved.name })
     emit('saved', saved)
     open.value = false
   } catch (e) {
@@ -69,7 +65,7 @@ async function save() {
 </script>
 
 <template>
-  <Drawer v-model:open="open" :title="isEdit ? '编辑门店' : '新建门店'" description="门店用于区分交易来源，创建支付订单时可指定门店。">
+  <Drawer v-model:open="open" title="新建门店" description="门店用于区分交易来源，创建支付订单时可指定门店。">
     <form id="store-form" class="flex flex-col gap-4" novalidate @submit.prevent="save">
       <FormField label="门店名称" for="s-name" required :error="err('name')">
         <Input id="s-name" v-model="form.name" placeholder="如：静安嘉里中心店" :invalid="!!err('name')" />
@@ -98,7 +94,7 @@ async function save() {
     </form>
     <template #footer>
       <Button @click="open = false">取消</Button>
-      <Button variant="primary" type="submit" form="store-form" :loading="saving">{{ isEdit ? '保存修改' : '创建门店' }}</Button>
+      <Button variant="primary" type="submit" form="store-form" :loading="saving">创建门店</Button>
     </template>
   </Drawer>
 </template>

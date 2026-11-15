@@ -14,7 +14,6 @@ import StatusBadge from '@/components/ui/StatusBadge.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
-import StoreFormDrawer from '@/components/business/StoreFormDrawer.vue'
 import { useAsync } from '@/composables/useAsync'
 import { useTradeCharts, type SeriesPoint } from '@/composables/useTradeCharts'
 import { buildPaymentColumns } from '@/pages/payments/paymentColumns'
@@ -33,10 +32,8 @@ const recent = useAsync(() => api.payments.list({ storeId: id.value, page: 1, pa
 
 const s = computed(() => store.data.value?.store ?? null)
 const statusMeta = computed(() => storeViewStatusMeta(s.value?.status))
-const editable = computed(() => s.value?.status === 'ACTIVE' || s.value?.status === 'DISABLED')
 const st = computed(() => stats.data.value)
 const notFound = computed(() => store.error.value?.includes('不存在'))
-const editOpen = ref(false)
 
 const points = computed<SeriesPoint[]>(() => (st.value?.trend ?? []).map((p) => ({ ...p, label: p.date.slice(5).replace('-', '/') })))
 const metric = ref<'amount' | 'count'>('amount')
@@ -75,7 +72,10 @@ const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'merchant
           </div>
         </template>
         <template #actions>
-          <Button :disabled="!editable" @click="editOpen = true"><Pencil aria-hidden="true" />编辑门店</Button>
+          <div class="flex items-center gap-2">
+            <span id="store-edit-disabled" class="text-xs text-muted-foreground">门店写入契约待评审，暂不支持在门户内编辑</span>
+            <Button disabled aria-describedby="store-edit-disabled"><Pencil aria-hidden="true" />编辑门店</Button>
+          </div>
         </template>
       </PageHeader>
 
@@ -128,7 +128,6 @@ const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'merchant
         />
       </Card>
 
-      <StoreFormDrawer v-model:open="editOpen" :store="s" @saved="store.reload()" />
     </template>
   </div>
 </template>

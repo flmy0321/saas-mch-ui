@@ -25,6 +25,7 @@ import {
   STORE_VIEW_VERSION,
 } from '@/types'
 import { isExactCount, MAX_PAGE } from '@/utils/count'
+import { isConsistentPage } from '@/utils/page'
 import { request, seg } from './client'
 
 const PNG_DATA_URL = /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/
@@ -79,7 +80,7 @@ function parsePaymentListPage(v: unknown): PaymentListPage {
     !isExactCount(p.total) ||
     !isIntIn(p.page, 1, MAX_PAGE) ||
     !isIntIn(p.pageSize, 1, 100) ||
-    !isNonEmptyString(p.asOf) ||
+    !isUtcTime(p.asOf) ||
     !Array.isArray(p.items) ||
     p.items.length > 100
   ) {
@@ -89,14 +90,7 @@ function parsePaymentListPage(v: unknown): PaymentListPage {
   return p as PaymentListPage
 }
 
-function checkPaymentItem(item: unknown, what: string): void {
-  const o = item as Record<string, unknown> | null
-  if (!hasExactKeys(o, LIST_ITEM_KEYS)) throw malformed(what)
-  if (o.source === 'API' && (typeof o.merchantOrderNo !== 'string' || typeof o.subject !== 'string')) throw malformed(what)
-  if (o.source === 'EXTERNAL' && o.merchantOrderNo !== null) throw malformed(what)
-}
-
-/* ---------- 严格视图校验（协议 3.1b / 3.8.0a） ---------- */
+/* ---------- 严格视图校验（协议 1.1 / 3.1a / 3.1b / 3.8.0a） ---------- */
 
 function hasExactKeys(o: unknown, keys: readonly string[]): o is Record<string, unknown> {
   if (!o || typeof o !== 'object' || Array.isArray(o)) return false
@@ -105,19 +99,72 @@ function hasExactKeys(o: unknown, keys: readonly string[]): o is Record<string, 
 }
 const isStr = (v: unknown): v is string => typeof v === 'string'
 const isStrOrNull = (v: unknown) => v === null || typeof v === 'string'
+const oneOf = (...allowed: string[]) => (v: unknown) => typeof v === 'string' && allowed.includes(v)
+
+/** 1.1 输出金额：恰好两位小数、非负，如 "128.00"；不接受 number、空串或其他写法 */
+const AMOUNT_OUTPUT = /^(0|[1-9]\d*)\.\d{2}$/
+const isAmount = (v: unknown): v is string => typeof v === 'string' && AMOUNT_OUTPUT.test(v)
+const isAmountOrNull = (v: unknown) => v === null || isAmount(v)
+
+/** ISO 8601 UTC 带毫秒，且是真实存在的日历时刻（如拒绝 2026-02-30） */
+const UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+function isUtcTime(v: unknown): v is string {
+  if (typeof v !== 'string' || !UTC_MS.test(v)) return false
+  const d = new Date(v)
+  return !Number.isNaN(d.getTime()) && d.toISOString() === v
+}
+const isUtcTimeOrNull = (v: unknown) => v === null || isUtcTime(v)
 
 type FieldRule = (v: unknown) => boolean
 type ItemRules = Record<string, FieldRule>
 
-function checkItem(item: unknown, rules: ItemRules, what: string): void {
+function checkItem(item: unknown, rules: ItemRules, what: string): asserts item is Record<string, unknown> {
   const keys = Object.keys(rules)
   if (!hasExactKeys(item, keys)) throw malformed(what)
   for (const k of keys) if (!rules[k](item[k])) throw malformed(what)
 }
 
+/**
+ * 3.1a/3.1b 22 键：逐字段校验类型与格式。
+ * source、currency、refundAggregate 为合同闭集；channel/method/status/coreStatus/refundEligibility/
+ * collectionVerification 为开放字符串（未知值保留原值展示），但必须是非空字符串。
+ */
+const PAYMENT_RULES: ItemRules = {
+  id: isNonEmptyString,
+  source: oneOf('API', 'EXTERNAL'),
+  merchantOrderNo: isStrOrNull,
+  storeId: isStrOrNull,
+  storeName: isStrOrNull,
+  subject: isStrOrNull,
+  amount: isAmount,
+  currency: oneOf('CNY'),
+  channel: isNonEmptyString,
+  method: isNonEmptyString,
+  createdAt: isUtcTime,
+  paidAt: isUtcTimeOrNull,
+  expireAt: isUtcTimeOrNull,
+  refundedAmount: isAmount,
+  refundingAmount: isAmount,
+  refundPrincipalLimit: isAmountOrNull,
+  availableRefundAmount: isAmountOrNull,
+  refundEligibility: isNonEmptyString,
+  collectionVerification: isNonEmptyString,
+  status: isNonEmptyString,
+  coreStatus: isNonEmptyString,
+  refundAggregate: oneOf('NONE', 'PARTIAL', 'FULL'),
+}
+if (Object.keys(PAYMENT_RULES).length !== LIST_ITEM_KEYS.length) throw new Error('PAYMENT_RULES 与 22 键不一致')
+
+function checkPaymentItem(item: unknown, what: string): void {
+  checkItem(item, PAYMENT_RULES, what)
+  // 来源联动按合同：API 的订单号与商品描述必为字符串；EXTERNAL 订单号必为 null，商品描述可为 null 或真实字符串
+  if (item.source === 'API' && (typeof item.merchantOrderNo !== 'string' || typeof item.subject !== 'string')) throw malformed(what)
+  if (item.source === 'EXTERNAL' && item.merchantOrderNo !== null) throw malformed(what)
+}
+
 /** 单项：恰好 viewVersion / 数据键 / asOf 三键 */
 function parseSingle<T>(v: unknown, version: string, dataKey: string, check: (item: unknown) => void, what: string): T {
-  if (!hasExactKeys(v, ['viewVersion', dataKey, 'asOf']) || v.viewVersion !== version || !isNonEmptyString(v.asOf)) {
+  if (!hasExactKeys(v, ['viewVersion', dataKey, 'asOf']) || v.viewVersion !== version || !isUtcTime(v.asOf)) {
     throw malformed(what)
   }
   check(v[dataKey])
@@ -132,9 +179,9 @@ function parsePage<T>(v: unknown, version: string, check: (item: unknown) => voi
     !isIntIn(v.total, 0, Number.MAX_SAFE_INTEGER) ||
     !isIntIn(v.page, 1, MAX_PAGE) ||
     !isIntIn(v.pageSize, 1, 100) ||
-    !isNonEmptyString(v.asOf) ||
+    !isUtcTime(v.asOf) ||
     !Array.isArray(v.items) ||
-    v.items.length > v.pageSize
+    !isConsistentPage(v.total, v.page, v.pageSize, v.items.length)
   ) {
     throw malformed(what)
   }
@@ -142,20 +189,25 @@ function parsePage<T>(v: unknown, version: string, check: (item: unknown) => voi
   return v as T
 }
 
-const MERCHANT_RULES: ItemRules = { merchantNo: isNonEmptyString, name: isStr, status: isNonEmptyString, createdAt: isNonEmptyString }
+const MERCHANT_RULES: ItemRules = { merchantNo: isNonEmptyString, name: isStr, status: isNonEmptyString, createdAt: isUtcTime }
 const STORE_RULES: ItemRules = {
-  id: isNonEmptyString, storeNo: isNonEmptyString, merchantStoreNo: isStrOrNull, name: isStr, status: isNonEmptyString, createdAt: isNonEmptyString,
+  id: isNonEmptyString, storeNo: isNonEmptyString, merchantStoreNo: isStrOrNull, name: isStr, status: isNonEmptyString, createdAt: isUtcTime,
 }
 const APP_RULES: ItemRules = {
-  id: isNonEmptyString, appId: isNonEmptyString, name: isStr, env: isNonEmptyString, status: isNonEmptyString, createdAt: isNonEmptyString,
+  id: isNonEmptyString, appId: isNonEmptyString, name: isStr, env: isNonEmptyString, status: isNonEmptyString, createdAt: isUtcTime,
 }
 const REFUND_RULES: ItemRules = {
   id: isNonEmptyString, merchantRefundNo: isStrOrNull, paymentId: isNonEmptyString, storeId: isStrOrNull, storeName: isStrOrNull,
-  amount: isStr, status: isNonEmptyString, reason: isStrOrNull, createdAt: isNonEmptyString, finishedAt: isStrOrNull,
+  amount: isAmount, status: isNonEmptyString, reason: isStrOrNull, createdAt: isUtcTime, finishedAt: isUtcTimeOrNull,
 }
+/** 3.8.4：只有 SUCCESS/FAILED/CLOSED 可携带终态时间；其他状态（含 SUSPENDED 与未知值）finishedAt 必为 null */
+const REFUND_TERMINAL = new Set(['SUCCESS', 'FAILED', 'CLOSED'])
 const checkStore = (i: unknown) => checkItem(i, STORE_RULES, '门店')
 const checkApp = (i: unknown) => checkItem(i, APP_RULES, 'App')
-const checkRefund = (i: unknown) => checkItem(i, REFUND_RULES, '退款')
+function checkRefund(i: unknown): void {
+  checkItem(i, REFUND_RULES, '退款')
+  if (!REFUND_TERMINAL.has(i.status as string) && i.finishedAt !== null) throw malformed('退款')
+}
 
 /** 精确查询：返回的两个键必须与请求一致（null 视为不一致），否则按畸形响应处理 */
 function parseRefundExact(v: unknown, paymentId: string, merchantRefundNo: string): RefundViewSingle {

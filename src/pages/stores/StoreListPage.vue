@@ -2,7 +2,7 @@
 import { computed, h, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import type { ColumnDef } from '@tanstack/vue-table'
-import { Pencil, Plus } from '@lucide/vue'
+import { Plus } from '@lucide/vue'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import Card from '@/components/ui/Card.vue'
 import FilterPanel from '@/components/ui/FilterPanel.vue'
@@ -34,14 +34,9 @@ const query = computed(() => ({
 }))
 const list = useAsync(() => api.stores.list(query.value), { watch: query })
 
+// 门店编辑已关闭（V051-5）：只读视图不含地址/联系人，写契约未评审
 const drawerOpen = ref(false)
-const editing = ref<StoreView | null>(null)
 function openCreate() {
-  editing.value = null
-  drawerOpen.value = true
-}
-function openEdit(s: StoreView) {
-  editing.value = s
   drawerOpen.value = true
 }
 
@@ -69,30 +64,11 @@ h('span', { class: 'font-medium' }, row.original.name),
     },
   },
   { id: 'createdAt', header: '创建时间', cell: ({ row }) => muted(formatDateTime(row.original.createdAt)) },
-  {
-    id: 'actions',
-    header: () => h('span', { class: 'sr-only' }, '操作'),
-    meta: { align: 'right' },
-    cell: ({ row }) =>
-      h(
-        Button,
-        {
-          variant: 'ghost',
-          size: 'sm',
-          'aria-label': `编辑 ${row.original.name}`,
-          onClick: (e: MouseEvent) => {
-            e.stopPropagation()
-            openEdit(row.original)
-          },
-        },
-        () => [h(Pencil, { 'aria-hidden': 'true' }), '编辑'],
-      ),
-  },
 ]
 
 function onSaved(s: Store) {
   list.reload()
-  if (!editing.value) router.push(`/stores/${s.id}`)
+  router.push(`/stores/${s.id}`)
 }
 </script>
 
@@ -142,6 +118,6 @@ function onSaved(s: Store) {
       </div>
     </Card>
 
-    <StoreFormDrawer v-model:open="drawerOpen" :store="editing" @saved="onSaved" />
+    <StoreFormDrawer v-model:open="drawerOpen" @saved="onSaved" />
   </div>
 </template>
