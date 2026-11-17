@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import type { ColumnDef } from '@tanstack/vue-table'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import Card from '@/components/ui/Card.vue'
@@ -33,6 +33,18 @@ const query = computed(() => ({
   status: (applied.value.status || undefined) as WebhookDeliveryStatus | undefined,
 }))
 const list = useAsync(() => api.webhooks.deliveries(query.value), { watch: query })
+
+/** 记录减少后当前页可能越过末页（如 {page:2,total:"1",items:[]}），回到按 total 计算的末页重查 */
+watch(
+  () => list.data.value,
+  (res) => {
+    if (!res || res.items.length > 0 || res.page <= 1) return
+    const total = BigInt(res.total)
+    const size = BigInt(res.pageSize)
+    const last = total === 0n ? 1 : Number((total + size - 1n) / size)
+    if (last < res.page) page.value = last
+  },
+)
 
 const selected = ref<WebhookDelivery | null>(null)
 const drawerOpen = computed({

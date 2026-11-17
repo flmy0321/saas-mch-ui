@@ -286,7 +286,8 @@ function parseDeveloperPage<T>(
     !isIntIn(pageSize, 1, 100) ||
     !Array.isArray(items) ||
     items.length > pageSize ||
-    BigInt(total) < BigInt((page - 1) * pageSize + items.length)
+    /* 条目减少后请求页可能已越过末页：{page:2,total:"1",items:[]} 是合法空页，由页面回到有效页重查 */
+    (items.length > 0 && BigInt(total) < BigInt((page - 1) * pageSize + items.length))
   ) {
     throw malformed(what)
   }
@@ -334,6 +335,10 @@ const isConsistentDelivery = (d: Record<string, unknown>) =>
 
 const isDeliveryFor = (resourceId: string) => (d: Record<string, unknown>) =>
   isConsistentDelivery(d) && (d.resource as { id: string }).id === resourceId
+
+export function parseDeliveryPage(v: unknown): DeveloperPage<WebhookDelivery> {
+  return parseDeveloperPage<WebhookDelivery>(v, DELIVERY_RULES, 'Webhook 投递记录', isConsistentDelivery)
+}
 
 function parseWebhookConfigView(v: unknown, appId: string): WebhookConfigView {
   if (!hasExactKeys(v, ['viewVersion', 'asOf', 'config']) || v.viewVersion !== DEVELOPER_READ_VIEW_VERSION || !isInstant(v.asOf)) {
@@ -792,11 +797,8 @@ export const httpApi: MerchantApi = {
         commandId,
       ),
     deliveries: async (query) =>
-      parseDeveloperPage<WebhookDelivery>(
+      parseDeliveryPage(
         await request<unknown>('/webhook-deliveries', { query: { ...query, viewVersion: DEVELOPER_READ_VIEW_VERSION } }),
-        DELIVERY_RULES,
-        'Webhook 投递记录',
-        isConsistentDelivery,
       ),
     deliveriesFor: async (resourceId, query) =>
       parseDeveloperPage<WebhookDelivery>(

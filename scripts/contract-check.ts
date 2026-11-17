@@ -29,7 +29,7 @@ const g = globalThis as Record<string, unknown>
 g.sessionStorage ??= new MemoryStorage()
 g.localStorage ??= new MemoryStorage()
 
-const { parseTrend, parseChannelShare, parseAnalytics, parseStoreStats, parseGlobalSearch } = await import('../src/services/http/api')
+const { parseTrend, parseChannelShare, parseAnalytics, parseStoreStats, parseGlobalSearch, parseDeliveryPage } = await import('../src/services/http/api')
 const { parseKeyCommand, parseWebhookTest, parseWebhookCommand, parseStoreCommand } = await import('../src/services/http/commands')
 const { runCommand, getPendingCommand, forgetCommand, isVersionConflict, webhookTestSucceeded } = await import(
   '../src/services/commands'
@@ -473,6 +473,42 @@ await check('缺少 granularity 时拒绝', () => {
 })
 await check('granularity 非 day/week/month 时拒绝', () => {
   rejects(() => parseAnalytics(analyticsOk({ granularity: 'year' })))
+})
+
+console.log('开发者列表空末页')
+const DEV_V = 'portal-developer-read-view/0.1-draft'
+const devPage = (extra: Record<string, unknown>) => ({
+  viewVersion: DEV_V,
+  asOf: '2026-11-17T08:00:00.000Z',
+  items: [],
+  total: '0',
+  page: 1,
+  pageSize: 20,
+  ...extra,
+})
+const delivery = {
+  eventId: 'evt_1',
+  eventType: 'payment.succeeded',
+  resource: { type: 'payment', id: 'pay_1' },
+  appId: 'app_1',
+  status: 'COMPLETED',
+  allocatedAttempts: '1',
+  createdAt: '2026-11-17T08:00:00.000Z',
+  nextAttemptAt: null,
+  acknowledgedAt: '2026-11-17T08:00:01.000Z',
+  lastHttpStatus: 200,
+  lastErrorCode: null,
+}
+await check('{page:2,total:"1",items:[]} 是合法空末页', () => {
+  const v = parseDeliveryPage(devPage({ page: 2, total: '1' }))
+  assert.equal(v.items.length, 0)
+  assert.equal(v.total, '1')
+})
+await check('越过末页但带数据的页被拒绝', () => {
+  rejects(() => parseDeliveryPage(devPage({ page: 2, total: '1', items: [delivery] })))
+})
+await check('首页 total 与条目一致时接受', () => {
+  assert.equal(parseDeliveryPage(devPage({ total: '1', items: [delivery] })).items.length, 1)
 })
 
 console.log(`\n${passed} passed, ${failures.length} failed`)
