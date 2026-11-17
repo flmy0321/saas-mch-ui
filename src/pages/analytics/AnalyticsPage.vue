@@ -64,7 +64,7 @@ const avgText = computed(() => {
 const points = computed<SeriesPoint[]>(() => (result.data.value?.buckets ?? []).map((b) => chartPoint(b.key, b)))
 const shares = computed(() => result.data.value?.byChannel ?? [])
 const observedOnly = computed(() => result.data.value?.directoryMode === DIRECTORY_MODE_OBSERVED_ONLY)
-const storeByNo = computed(() => new Map((stores.data.value ?? []).map((s) => [s.storeNo, s])))
+const storeByCode = computed(() => new Map((stores.data.value ?? []).map((s) => [s.id, s])))
 const metric = ref<'amount' | 'count'>('amount')
 const charts = useTradeCharts()
 const trendOption = charts.amountTrend(points, metric)
@@ -77,7 +77,7 @@ const storeRank = computed(() => {
   const fens = rows.map((r) => toFen(r.amount) ?? 0n)
   const max = fens.reduce((m, f) => (f > m ? f : m), 1n)
   return rows.map((r, i) => {
-    const known = r.storeCode ? storeByNo.value.get(r.storeCode) : undefined
+    const known = r.storeCode ? storeByCode.value.get(r.storeCode) : undefined
     return {
       key: r.storeCode ?? `unlinked-${i}`,
       name: r.storeCode === null ? '未关联门店' : (known?.name ?? r.storeCode),

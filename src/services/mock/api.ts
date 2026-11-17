@@ -732,7 +732,7 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
           .map((s) => ({ s, a: aggregate(from, to, { storeId: s.id, channel: q.channel }) }))
           .filter(({ a }) => a.successCount > 0)
           .sort((x, y) => (y.a.successAmount > x.a.successAmount ? 1 : y.a.successAmount < x.a.successAmount ? -1 : 0))
-          .map(({ s, a }) => ({ storeCode: s.storeNo, amount: fenToAmount(a.successAmount), count: String(a.successCount) }))
+          .map(({ s, a }) => ({ storeCode: s.id, amount: fenToAmount(a.successAmount), count: String(a.successCount) }))
         return {
           ...completedBase(from, toDay),
           current: { fromDate: ymd(from), toDate: ymd(toDay), metrics: reportMetrics(cur) },
@@ -763,14 +763,14 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
     get: (id) => delay(() => ({ viewVersion: STORE_VIEW_VERSION, store: storeViewDto(findStore(id)), asOf: asOf() })),
     stats: (storeCode) =>
       delay((): StoreStatsView => {
-        const s = stores.find((x) => x.storeNo === storeCode)
+        const s = stores.find((x) => x.id === storeCode)
         if (!s) fail('门店不存在', 'STORE_NOT_FOUND', 404)
         const last = lastCompletedDay()
         const from = last - 29 * DAY
         const a = aggregate(from, last + DAY - 1, { storeId: s.id })
         return {
           ...completedBase(from, last),
-          storeId: s.storeNo,
+          storeId: s.id,
           metrics: reportMetrics(a),
           presentation: presentationOf(a),
           points: completedPoints(30, { storeId: s.id }),
@@ -977,7 +977,7 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
             'store',
             stores
               .filter((s) => s.name.includes(kw) || s.storeNo.includes(kw) || (s.merchantStoreNo ?? '').includes(kw))
-              .map((s) => ({ type: 'store', id: s.storeNo, title: `${s.name} · ${s.storeNo}`, to: `/stores/${s.id}` })),
+              .map((s) => ({ type: 'store', id: s.id, title: `${s.name} · ${s.storeNo}`, to: `/stores/${s.id}` })),
           )
         : empty('store', 'NOT_APPLICABLE')
       return { viewVersion: GLOBAL_SEARCH_VIEW_VERSION, groups: [payment, refund, store] }

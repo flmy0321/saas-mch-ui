@@ -100,7 +100,7 @@ export interface MerchantApi {
     /** 解包 options().items，供登录后加载与各页门店筛选使用 */
     all(): Promise<StoreOption[]>
     get(id: string): Promise<StoreViewSingle>
-    /** storeCode 为平台门店号（storeNo）；窗口为最近 30 个已完成营业日 */
+    /** storeCode 为核心门店编号（Store.id，与交易 storeId 同值）；窗口为最近 30 个已完成营业日 */
     stats(storeCode: string): Promise<StoreStatsView>
     create(input: StoreInput): Promise<Store>
     update(id: string, input: StoreInput): Promise<Store>

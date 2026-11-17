@@ -30,7 +30,7 @@ const id = computed(() => String(route.params.id))
 
 const store = useAsync(() => api.stores.get(id.value))
 const s = computed(() => store.data.value?.store ?? null)
-const storeCode = computed(() => s.value?.storeNo ?? null)
+const storeCode = computed(() => s.value?.id ?? null)
 const stats = useAsync(
   async () => {
     if (!storeCode.value) return null
