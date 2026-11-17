@@ -37,7 +37,7 @@ const id = computed(() => String(route.params.id))
 const detail = useAsync(() => api.payments.get(id.value))
 const refunds = useAsync(() => api.refunds.list({ paymentId: id.value, page: 1, pageSize: 50 }))
 const info = useAsync(() => api.payments.refundable(id.value))
-const deliveries = useAsync(() => api.webhooks.deliveriesFor(id.value))
+const deliveries = useAsync(() => api.webhooks.deliveriesFor(id.value, { page: 1, pageSize: 20 }))
 
 const p = computed(() => detail.data.value?.payment ?? null)
 const refundOpen = ref(false)
@@ -249,7 +249,7 @@ function onRefundCreated(refundId: string) {
           </Card>
 
           <Card title="Webhook 通知" description="与该订单相关的事件通知" body-class="p-0">
-            <WebhookDeliveryList :items="deliveries.data.value ?? []" :loading="deliveries.loading.value" :error="deliveries.error.value" @retry="deliveries.reload()" />
+            <WebhookDeliveryList :items="deliveries.data.value?.items ?? []" :total="deliveries.data.value?.total" :resource-id="id" :loading="deliveries.loading.value" :error="deliveries.error.value" @retry="deliveries.reload()" />
           </Card>
         </div>
 

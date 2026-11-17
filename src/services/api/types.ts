@@ -6,6 +6,8 @@ import type {
   StoreStatsView,
   TrendView,
   ApiKey,
+  ApiKeyQuery,
+  DeveloperPage,
   AuthTokens,
   Captcha,
   CreateRefundInput,
@@ -31,7 +33,7 @@ import type {
   MerchantSelection,
   SelectMerchantInput,
   Notification,
-  Paginated,
+  PageQuery,
   PaymentListPage,
   PaymentQuery,
   RefundQuery,
@@ -40,6 +42,7 @@ import type {
   StoreInput,
   StoreQuery,
   WebhookConfig,
+  WebhookConfigView,
   WebhookDelivery,
   WebhookDeliveryQuery,
 } from '@/types'
@@ -108,17 +111,17 @@ export interface MerchantApi {
     get(appId: string): Promise<AppViewSingle>
   }
   keys: {
-    list(appId?: string): Promise<ApiKey[]>
+    list(query: ApiKeyQuery): Promise<DeveloperPage<ApiKey>>
     create(appId: string): Promise<CreatedApiKey>
-    rotate(id: string): Promise<CreatedApiKey>
-    revoke(id: string): Promise<ApiKey>
+    rotate(keyId: string): Promise<CreatedApiKey>
+    revoke(keyId: string): Promise<ApiKey>
   }
   webhooks: {
-    getConfig(appId: string): Promise<WebhookConfig>
-    updateConfig(appId: string, input: Pick<WebhookConfig, 'url' | 'enabled' | 'events'>): Promise<WebhookConfig>
+    getConfig(appId: string): Promise<WebhookConfigView>
+    updateConfig(appId: string, input: Pick<WebhookConfig, 'url' | 'enabled'>): Promise<WebhookConfig>
     sendTest(appId: string): Promise<{ httpStatus: number; durationMs: number }>
-    deliveries(query: WebhookDeliveryQuery): Promise<Paginated<WebhookDelivery>>
-    deliveriesFor(resourceId: string): Promise<WebhookDelivery[]>
+    deliveries(query: WebhookDeliveryQuery): Promise<DeveloperPage<WebhookDelivery>>
+    deliveriesFor(resourceId: string, query?: PageQuery): Promise<DeveloperPage<WebhookDelivery>>
   }
   account: {
     merchant(): Promise<MerchantProfileView>

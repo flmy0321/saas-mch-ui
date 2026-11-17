@@ -10,46 +10,38 @@ import Select from '@/components/ui/Select.vue'
 import FormField from '@/components/ui/FormField.vue'
 import Input from '@/components/ui/Input.vue'
 import Switch from '@/components/ui/Switch.vue'
-import Checkbox from '@/components/ui/Checkbox.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import { useAsync } from '@/composables/useAsync'
 import { useAppPicker } from '@/composables/useAppPicker'
 import AppPickerStatus from '@/components/business/AppPickerStatus.vue'
 import { api } from '@/services/api'
-import { webhookEventLabel } from '@/utils/dictionaries'
+import { WEBHOOK_EVENT, webhookEventLabel } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 import type { WebhookEventType } from '@/types'
+
+const eventTypes = Object.keys(WEBHOOK_EVENT) as WebhookEventType[]
 
 const { apps, options, appId } = useAppPicker()
 const config = useAsync(() => (appId.value ? api.webhooks.getConfig(appId.value) : Promise.resolve(null)), { watch: appId })
 
-const cfg = computed(() => config.data.value)
-const form = reactive<{ url: string; enabled: boolean; events: WebhookEventType[] }>({ url: '', enabled: false, events: [] })
+const cfg = computed(() => config.data.value?.config ?? null)
+const form = reactive<{ url: string; enabled: boolean }>({ url: '', enabled: false })
 const submitted = ref(false)
 const saving = ref(false)
 const testing = ref(false)
 const testResult = ref<{ ok: boolean; text: string } | null>(null)
 
 watch(
-  () => config.data.value,
+  cfg,
   (c) => {
     if (!c) return
-    Object.assign(form, { url: c.url, enabled: c.enabled, events: [...c.events] })
+    Object.assign(form, { url: c.url ?? '', enabled: c.enabled })
     submitted.value = false
     testResult.value = null
   },
   { immediate: true },
 )
-
-const groups: { title: string; events: WebhookEventType[] }[] = [
-  { title: '支付事件', events: ['PAYMENT.SUCCEEDED', 'PAYMENT.FAILED', 'PAYMENT.CLOSED'] },
-  { title: '退款事件', events: ['REFUND.SUCCEEDED', 'REFUND.FAILED', 'REFUND.CLOSED'] },
-]
-
-function toggleEvent(e: WebhookEventType, v: boolean) {
-  form.events = v ? [...new Set([...form.events, e])] : form.events.filter((x) => x !== e)
-}
 
 const urlError = computed(() => {
   if (!form.url.trim()) return form.enabled ? '启用通知时必须填写回调地址' : null
@@ -62,20 +54,18 @@ const urlError = computed(() => {
   }
   return null
 })
-const eventsError = computed(() => (form.enabled && !form.events.length ? '请至少订阅一个事件' : null))
-
 const dirty = computed(() => {
-  const c = config.data.value
+  const c = cfg.value
   if (!c) return false
-  return c.url !== form.url || c.enabled !== form.enabled || [...c.events].sort().join() !== [...form.events].sort().join()
+  return (c.url ?? '') !== form.url || c.enabled !== form.enabled
 })
 
 async function save() {
   submitted.value = true
-  if (urlError.value || eventsError.value) return
+  if (urlError.value) return
   saving.value = true
   try {
-    await api.webhooks.updateConfig(appId.value, { url: form.url.trim(), enabled: form.enabled, events: form.events })
+    await api.webhooks.updateConfig(appId.value, { url: form.url.trim() || null, enabled: form.enabled })
     toast.success('Webhook 配置已保存')
     config.reload()
   } catch (e) {
@@ -100,8 +90,8 @@ async function sendTest() {
 }
 
 function reset() {
-  const c = config.data.value
-  if (c) Object.assign(form, { url: c.url, enabled: c.enabled, events: [...c.events] })
+  const c = cfg.value
+  if (c) Object.assign(form, { url: c.url ?? '', enabled: c.enabled })
   submitted.value = false
 }
 </script>
@@ -150,28 +140,20 @@ function reset() {
           </div>
         </Card>
 
-        <Card title="订阅事件" :description="eventsError && submitted ? undefined : '仅推送已勾选的事件类型'">
-          <p v-if="submitted && eventsError" class="mb-3 text-[13px] text-danger" role="alert">{{ eventsError }}</p>
-          <div class="grid gap-5 sm:grid-cols-2">
-            <fieldset v-for="g in groups" :key="g.title" class="flex flex-col gap-2">
-              <legend class="mb-1 text-xs font-medium text-muted-foreground">{{ g.title }}</legend>
-              <label
-                v-for="e in g.events"
-                :key="e"
-                class="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 transition-colors hover:bg-muted/50"
-              >
-                <Checkbox :id="`ev-${e}`" :model-value="form.events.includes(e)" @update:model-value="(v: boolean) => toggleEvent(e, v)" />
-                <span class="flex flex-col">
-                  <span class="text-[13px] font-medium">{{ webhookEventLabel(e) }}</span>
-                  <span class="font-mono text-xs text-muted-foreground">{{ e }}</span>
-                </span>
-              </label>
-            </fieldset>
-          </div>
+        <Card title="订阅事件" description="事件订阅暂不在门户配置范围内">
+          <p class="text-[13px] leading-relaxed text-muted-foreground">
+            当前配置视图只包含回调地址与启用状态，不返回订阅事件，门户也不提交订阅修改。如需调整推送的事件类型，请联系平台。
+          </p>
+          <ul class="mt-3 flex flex-wrap gap-2">
+            <li v-for="e in eventTypes" :key="e" class="rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
+              {{ e }} · {{ webhookEventLabel(e) }}
+            </li>
+          </ul>
         </Card>
 
         <div class="flex items-center justify-end gap-2">
-          <span class="mr-auto text-xs text-muted-foreground">最近保存于 {{ formatDateTime(cfg?.updatedAt ?? "") }}</span>
+          <span v-if="config.data.value" class="mr-auto text-xs text-muted-foreground tabular">数据截至 {{ formatDateTime(config.data.value.asOf) }}</span>
+          <span v-else class="mr-auto" />
           <Button type="button" :disabled="!dirty || saving" @click="reset">放弃修改</Button>
           <Button type="submit" variant="primary" :loading="saving" :disabled="!dirty">保存配置</Button>
         </div>

@@ -22,7 +22,11 @@ import { formatDateTime } from '@/utils/format'
 import type { ApiKey, CreatedApiKey } from '@/types'
 
 const { apps, options, appId, current } = useAppPicker()
-const keys = useAsync(() => (appId.value ? api.keys.list(appId.value) : Promise.resolve([])), { watch: appId })
+const keys = useAsync(
+  () => (appId.value ? api.keys.list({ appId: appId.value, page: 1, pageSize: 100 }) : Promise.resolve(null)),
+  { watch: appId },
+)
+const keyItems = computed(() => keys.data.value?.items ?? [])
 
 const creating = ref(false)
 const created = ref<CreatedApiKey | null>(null)
@@ -38,7 +42,7 @@ const confirmOpen = computed({
 })
 const confirming = ref(false)
 
-const usable = computed(() => (keys.data.value ?? []).filter((k) => k.status === 'ACTIVE' || k.status === 'EXPIRING').length)
+const usable = computed(() => keyItems.value.filter((k) => k.status !== 'REVOKED').length)
 
 function showSecret(k: CreatedApiKey, mode: 'create' | 'rotate') {
   savedAck.value = false
@@ -65,9 +69,9 @@ async function runConfirm() {
   confirming.value = true
   try {
     if (kind === 'rotate') {
-      showSecret(await api.keys.rotate(key.id), 'rotate')
+      showSecret(await api.keys.rotate(key.keyId), 'rotate')
     } else {
-      await api.keys.revoke(key.id)
+      await api.keys.revoke(key.keyId)
       toast.success('密钥已撤销', { description: key.keyId })
     }
     confirm.value = null
@@ -82,27 +86,37 @@ async function runConfirm() {
 const muted = (t: string) => h('span', { class: 'whitespace-nowrap text-muted-foreground tabular' }, t)
 const columns: ColumnDef<ApiKey>[] = [
   { id: 'keyId', header: 'Key ID', cell: ({ row }) => h('span', { class: 'font-mono text-[13px]' }, row.original.keyId) },
-  { id: 'secret', header: '密钥', cell: ({ row }) => h('span', { class: 'font-mono text-xs text-muted-foreground' }, row.original.maskedSecret) },
   {
     id: 'status',
     header: '状态',
     cell: ({ row }) => h(StatusBadge, { tone: API_KEY_STATUS[row.original.status].tone, dot: true }, () => API_KEY_STATUS[row.original.status].label),
   },
   { id: 'createdAt', header: '创建时间', cell: ({ row }) => muted(formatDateTime(row.original.createdAt)) },
-  { id: 'expireAt', header: '失效时间', cell: ({ row }) => muted(row.original.expireAt ? formatDateTime(row.original.expireAt) : '长期有效') },
-  { id: 'lastUsedAt', header: '最近使用', cell: ({ row }) => muted(row.original.lastUsedAt ? formatDateTime(row.original.lastUsedAt) : '从未使用') },
+  { id: 'validFrom', header: '生效时间', cell: ({ row }) => muted(formatDateTime(row.original.validFrom)) },
+  {
+    id: 'validUntil',
+    header: '有效期至',
+    cell: ({ row }) => muted(row.original.validUntil ? formatDateTime(row.original.validUntil) : '长期有效'),
+  },
+  {
+    id: 'revokedAt',
+    header: '撤销时间',
+    cell: ({ row }) => muted(row.original.revokedAt ? formatDateTime(row.original.revokedAt) : '—'),
+  },
   {
     id: 'actions',
     header: () => h('span', { class: 'sr-only' }, '操作'),
     meta: { align: 'right' },
     cell: ({ row }) => {
       const k = row.original
-      if (k.status !== 'ACTIVE' && k.status !== 'EXPIRING') return null
+      if (k.status === 'REVOKED') return null
       return h('div', { class: 'flex justify-end gap-1' }, [
-        h(Button, { variant: 'ghost', size: 'sm', onClick: () => (confirm.value = { kind: 'rotate', key: k }) }, () => [
-          h(RefreshCw, { 'aria-hidden': 'true' }),
-          '轮换',
-        ]),
+        k.status === 'ACTIVE'
+          ? h(Button, { variant: 'ghost', size: 'sm', onClick: () => (confirm.value = { kind: 'rotate', key: k }) }, () => [
+              h(RefreshCw, { 'aria-hidden': 'true' }),
+              '轮换',
+            ])
+          : null,
         h(Button, { variant: 'ghost', size: 'sm', class: 'text-danger hover:text-danger', onClick: () => (confirm.value = { kind: 'revoke', key: k }) }, () => [
           h(ShieldOff, { 'aria-hidden': 'true' }),
           '撤销',
@@ -139,13 +153,14 @@ const columns: ColumnDef<ApiKey>[] = [
         <p class="text-[13px] text-muted-foreground">
           可用密钥 <span class="font-medium text-foreground tabular">{{ usable }}</span> / 最多 2 个
         </p>
+        <p v-if="keys.data.value" class="text-xs text-muted-foreground tabular">数据截至 {{ formatDateTime(keys.data.value.asOf) }}</p>
       </div>
       <DataTable
         :columns="columns"
-        :data="keys.data.value ?? []"
+        :data="keyItems"
         :loading="keys.loading.value"
         :error="keys.error.value"
-        :row-key="(k: ApiKey) => k.id"
+        :row-key="(k: ApiKey) => k.keyId"
         :skeleton-rows="3"
         empty-title="尚未创建密钥"
         empty-description="创建密钥后即可通过开放接口发起支付与退款。"

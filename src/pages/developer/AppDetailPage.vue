@@ -18,13 +18,14 @@ import { formatDateTime } from '@/utils/format'
 const route = useRoute()
 const appId = computed(() => String(route.params.appId))
 const detail = useAsync(() => api.apps.get(appId.value))
-const keys = useAsync(() => api.keys.list(appId.value))
+const keys = useAsync(() => api.keys.list({ appId: appId.value, page: 1, pageSize: 100 }))
 const hook = useAsync(() => api.webhooks.getConfig(appId.value))
+const hookConfig = computed(() => hook.data.value?.config ?? null)
 const a = computed(() => detail.data.value?.app ?? null)
 const envMeta = computed(() => appEnvMeta(a.value?.env))
 const statusMeta = computed(() => appStatusMeta(a.value?.status))
 
-const activeKeys = computed(() => (keys.data.value ?? []).filter((k) => ['ACTIVE', 'EXPIRING', 'PENDING'].includes(k.status)))
+const activeKeys = computed(() => (keys.data.value?.items ?? []).filter((k) => k.status !== 'REVOKED'))
 
 const items = computed(() =>
   a.value
@@ -81,7 +82,7 @@ const items = computed(() =>
               <p class="text-[13px] text-muted-foreground">尚未创建可用密钥</p>
             </div>
             <ul v-else class="flex flex-col gap-2">
-              <li v-for="k in activeKeys" :key="k.id" class="flex items-center justify-between gap-3 rounded-md bg-muted/60 px-3 py-2">
+              <li v-for="k in activeKeys" :key="k.keyId" class="flex items-center justify-between gap-3 rounded-md bg-muted/60 px-3 py-2">
                 <span class="truncate font-mono text-xs">{{ k.keyId }}</span>
                 <StatusBadge :tone="API_KEY_STATUS[k.status].tone" dot>{{ API_KEY_STATUS[k.status].label }}</StatusBadge>
               </li>
@@ -94,14 +95,14 @@ const items = computed(() =>
                 配置<ArrowRight aria-hidden="true" />
               </Button>
             </template>
-            <Skeleton v-if="!hook.data.value" class="h-16" />
+            <p v-if="hook.error.value" class="text-[13px] text-danger" role="alert">{{ hook.error.value }}</p>
+            <Skeleton v-else-if="!hookConfig" class="h-16" />
             <div v-else class="flex flex-col gap-2">
               <div class="flex items-center gap-2">
                 <Webhook class="size-4 text-muted-foreground" aria-hidden="true" />
-                <StatusBadge :tone="hook.data.value.enabled ? 'success' : 'neutral'" dot>{{ hook.data.value.enabled ? '已启用' : '未启用' }}</StatusBadge>
+                <StatusBadge :tone="hookConfig.enabled ? 'success' : 'neutral'" dot>{{ hookConfig.enabled ? '已启用' : '未启用' }}</StatusBadge>
               </div>
-              <p class="break-all font-mono text-xs text-muted-foreground">{{ hook.data.value.url || '未配置回调地址' }}</p>
-              <p class="text-xs text-muted-foreground">订阅 {{ hook.data.value.events.length }} 个事件</p>
+              <p class="break-all font-mono text-xs text-muted-foreground">{{ hookConfig.url ?? '未配置回调地址' }}</p>
             </div>
           </Card>
         </div>

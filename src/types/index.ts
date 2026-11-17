@@ -276,46 +276,52 @@ export type KnownWebhookEventType =
   | 'REFUND.SUSPENDED'
 export type WebhookEventType = Open<KnownWebhookEventType>
 
-export type WebhookDeliveryStatus = Open<'SUCCESS' | 'FAILED' | 'RETRYING'>
+export const DEVELOPER_READ_VIEW_VERSION = 'portal-developer-read-view/0.1-draft' as const
 
-export interface WebhookAttempt {
-  attempt: number
-  at: string
-  httpStatus: number | null
-  durationMs: number
-  result: 'SUCCESS' | 'FAILED'
-  errorSummary: string | null
+/** 开发者中心读取列表：total 为十进制字符串，pageSize 最大 100 */
+export interface DeveloperPage<T> {
+  viewVersion: typeof DEVELOPER_READ_VIEW_VERSION
+  asOf: string
+  items: T[]
+  total: string
+  page: number
+  pageSize: number
+}
+
+export const WEBHOOK_DELIVERY_STATUSES = ['PENDING', 'SENDING', 'RETRY_WAIT', 'COMPLETED', 'EXHAUSTED'] as const
+export type WebhookDeliveryStatus = (typeof WEBHOOK_DELIVERY_STATUSES)[number]
+
+export interface WebhookDeliveryResource {
+  type: 'payment' | 'refund'
+  id: string
 }
 
 export interface WebhookDelivery {
-  id: string
   eventId: string
   eventType: WebhookEventType
-  resourceType: 'payment' | 'refund'
-  resourceId: string
+  resource: WebhookDeliveryResource
   appId: string
-  url: string
   status: WebhookDeliveryStatus
-  attempts: number
-  lastAttemptAt: string
-  nextRetryAt: string | null
-  attemptLog: WebhookAttempt[]
-  /** 测试投递标识，不写入正式事件 Schema */
-  isTest: boolean
+  /** 已分配的投递次数，十进制字符串，不转 Number */
+  allocatedAttempts: string
+  createdAt: string
+  nextAttemptAt: string | null
+  acknowledgedAt: string | null
+  lastHttpStatus: number | null
+  lastErrorCode: string | null
 }
 
-export type ApiKeyStatus = 'ACTIVE' | 'PENDING' | 'EXPIRING' | 'REVOKED' | 'EXPIRED'
+export const API_KEY_STATUSES = ['ACTIVE', 'GRACE', 'REVOKED'] as const
+export type ApiKeyStatus = (typeof API_KEY_STATUSES)[number]
 
 export interface ApiKey {
-  id: string
-  keyId: string
   appId: string
+  keyId: string
   status: ApiKeyStatus
-  maskedSecret: string
   createdAt: string
-  effectiveAt: string
-  expireAt: string | null
-  lastUsedAt: string | null
+  validFrom: string
+  validUntil: string | null
+  revokedAt: string | null
 }
 
 export interface CreatedApiKey extends ApiKey {
@@ -323,13 +329,17 @@ export interface CreatedApiKey extends ApiKey {
   plainSecret: string
 }
 
+/** 事件订阅当前不在读取视图中，也暂不可编辑 */
 export interface WebhookConfig {
   appId: string
-  url: string
+  url: string | null
   enabled: boolean
-  events: WebhookEventType[]
-  /** 从未配置为 null */
-  updatedAt: string | null
+}
+
+export interface WebhookConfigView {
+  viewVersion: typeof DEVELOPER_READ_VIEW_VERSION
+  asOf: string
+  config: WebhookConfig
 }
 
 export interface CurrentUser {
@@ -453,7 +463,12 @@ export interface StoreQuery extends PageQuery {
   status?: StoreViewStatus
 }
 
+export interface ApiKeyQuery extends PageQuery {
+  appId: string
+}
+
 export interface WebhookDeliveryQuery extends PageQuery {
+  appId?: string
   keyword?: string
   eventType?: WebhookEventType
   status?: WebhookDeliveryStatus

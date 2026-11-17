@@ -20,7 +20,7 @@ import { formatDateTime } from '@/utils/format'
 const route = useRoute()
 const id = computed(() => String(route.params.id))
 const detail = useAsync(() => api.refunds.get(id.value))
-const deliveries = useAsync(() => api.webhooks.deliveriesFor(id.value))
+const deliveries = useAsync(() => api.webhooks.deliveriesFor(id.value, { page: 1, pageSize: 20 }))
 const r = computed(() => detail.data.value?.refund ?? null)
 const notFound = computed(() => detail.error.value?.includes('不存在'))
 
@@ -122,7 +122,7 @@ const statusHint = computed(() => {
         </div>
 
         <Card title="Webhook 通知" description="与该退款相关的事件通知" body-class="p-0">
-          <WebhookDeliveryList :items="deliveries.data.value ?? []" :loading="deliveries.loading.value" :error="deliveries.error.value" @retry="deliveries.reload()" />
+          <WebhookDeliveryList :items="deliveries.data.value?.items ?? []" :total="deliveries.data.value?.total" :resource-id="id" :loading="deliveries.loading.value" :error="deliveries.error.value" @retry="deliveries.reload()" />
         </Card>
       </div>
     </template>

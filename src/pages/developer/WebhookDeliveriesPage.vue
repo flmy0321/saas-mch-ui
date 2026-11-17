@@ -18,15 +18,16 @@ import { useAsync } from '@/composables/useAsync'
 import { useQueryFilters } from '@/composables/useQueryFilters'
 import { api } from '@/services/api'
 import { WEBHOOK_EVENT, WEBHOOK_STATUS, webhookEventLabel, toOptions } from '@/utils/dictionaries'
-import { formatDateTime, formatNumber } from '@/utils/format'
+import { formatDateTime } from '@/utils/format'
 import type { WebhookDelivery, WebhookDeliveryStatus, WebhookEventType } from '@/types'
 
-const filters = useQueryFilters({ keyword: '', eventType: '', status: '' })
+const filters = useQueryFilters({ keyword: '', eventType: '', status: '', appId: '' })
 const { draft, applied, page, pageSize } = filters
 
 const query = computed(() => ({
   page: page.value,
   pageSize: pageSize.value,
+  appId: applied.value.appId || undefined,
   keyword: applied.value.keyword || undefined,
   eventType: (applied.value.eventType || undefined) as WebhookEventType | undefined,
   status: (applied.value.status || undefined) as WebhookDeliveryStatus | undefined,
@@ -43,6 +44,9 @@ const drawerOpen = computed({
 
 const eventOptions = (Object.keys(WEBHOOK_EVENT) as WebhookEventType[]).map((k) => ({ value: k, label: k }))
 const muted = (t: string) => h('span', { class: 'whitespace-nowrap text-muted-foreground tabular' }, t)
+const timeOrDash = (t: string | null) => (t ? formatDateTime(t) : '—')
+const resourceLink = (d: WebhookDelivery) =>
+  d.resource.type === 'payment' ? `/payments/${d.resource.id}` : `/refunds/${d.resource.id}`
 
 const columns: ColumnDef<WebhookDelivery>[] = [
   {
@@ -50,27 +54,24 @@ const columns: ColumnDef<WebhookDelivery>[] = [
     header: '事件',
     cell: ({ row }) =>
       h('div', { class: 'flex flex-col' }, [
-        h('span', { class: 'flex items-center gap-2 font-mono text-[13px]' }, [
-          row.original.eventType,
-          row.original.isTest
-            ? h('span', { class: 'rounded bg-muted px-1.5 py-0.5 font-sans text-[11px] text-muted-foreground' }, '测试')
-            : null,
-        ]),
+        h('span', { class: 'font-mono text-[13px]' }, row.original.eventType),
         h('span', { class: 'text-xs text-muted-foreground' }, webhookEventLabel(row.original.eventType)),
       ]),
   },
   {
     id: 'resource',
     header: '关联对象',
-    cell: ({ row }) => {
-      const d = row.original
-      return h(OrderNumber, { value: d.resourceId, to: d.resourceType === 'payment' ? `/payments/${d.resourceId}` : `/refunds/${d.resourceId}` })
-    },
+    cell: ({ row }) => h(OrderNumber, { value: row.original.resource.id, to: resourceLink(row.original) }),
   },
-  { id: 'status', header: '推送状态', cell: ({ row }) => h(WebhookStatusBadge, { status: row.original.status }) },
-  { id: 'attempts', header: '推送次数', meta: { align: 'right' }, cell: ({ row }) => h('span', { class: 'tabular' }, String(row.original.attempts)) },
-  { id: 'lastAttemptAt', header: '最近推送', cell: ({ row }) => muted(formatDateTime(row.original.lastAttemptAt)) },
-  { id: 'nextRetryAt', header: '下次重试', cell: ({ row }) => muted(row.original.nextRetryAt ? formatDateTime(row.original.nextRetryAt) : '—') },
+  { id: 'status', header: '投递状态', cell: ({ row }) => h(WebhookStatusBadge, { status: row.original.status }) },
+  {
+    id: 'allocatedAttempts',
+    header: '已分配次数',
+    meta: { align: 'right' },
+    cell: ({ row }) => h('span', { class: 'tabular' }, row.original.allocatedAttempts),
+  },
+  { id: 'createdAt', header: '创建时间', cell: ({ row }) => muted(formatDateTime(row.original.createdAt)) },
+  { id: 'nextAttemptAt', header: '下次投递', cell: ({ row }) => muted(timeOrDash(row.original.nextAttemptAt)) },
 ]
 
 const detailItems = computed(() => {
@@ -79,18 +80,23 @@ const detailItems = computed(() => {
   return [
     { key: 'eventId', label: '事件 ID', value: d.eventId },
     { key: 'eventType', label: '事件类型', value: d.eventType },
-    { key: 'isTest', label: '测试推送', value: d.isTest ? '是' : '否' },
-    { key: 'resourceId', label: '关联对象', value: d.resourceId },
+    { key: 'resourceId', label: d.resource.type === 'payment' ? '关联订单' : '关联退款', value: d.resource.id },
     { key: 'appId', label: 'AppID', value: d.appId },
-    { key: 'url', label: '回调地址', value: d.url },
-    { key: 'nextRetryAt', label: '下次重试', value: d.nextRetryAt ? formatDateTime(d.nextRetryAt) : '—' },
+    { key: 'createdAt', label: '创建时间', value: formatDateTime(d.createdAt) },
+    { key: 'nextAttemptAt', label: '下次投递', value: timeOrDash(d.nextAttemptAt) },
+    { key: 'acknowledgedAt', label: '确认时间', value: timeOrDash(d.acknowledgedAt) },
+    { key: 'lastHttpStatus', label: '最近 HTTP 状态', value: d.lastHttpStatus === null ? '—' : String(d.lastHttpStatus) },
+    { key: 'lastErrorCode', label: '最近错误码', value: d.lastErrorCode ?? '—' },
   ]
 })
 </script>
 
 <template>
   <div class="flex flex-col gap-5">
-    <PageHeader title="通知记录" description="查看 Webhook 事件的推送结果与重试记录，用于排查回调接收问题。" />
+    <PageHeader
+      title="通知记录"
+      description="查看 Webhook 事件的投递状态。只有回调地址返回 HTTP 2xx 才视为已确认。"
+    />
 
     <Card body-class="p-0">
       <FilterPanel :active-count="filters.activeCount.value" @apply="filters.apply()" @reset="filters.reset()">
@@ -100,15 +106,16 @@ const detailItems = computed(() => {
         <FormField label="事件类型" for="wd-type">
           <Select id="wd-type" v-model="draft.eventType" :options="eventOptions" allow-all />
         </FormField>
-        <FormField label="推送状态" for="wd-status">
+        <FormField label="投递状态" for="wd-status">
           <Select id="wd-status" v-model="draft.status" :options="toOptions(WEBHOOK_STATUS)" allow-all />
         </FormField>
       </FilterPanel>
 
-      <div class="px-4 py-2.5 sm:px-5">
+      <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 sm:px-5">
         <p class="text-[13px] text-muted-foreground" aria-live="polite">
-          共 <span class="font-medium text-foreground tabular">{{ formatNumber(list.data.value?.total ?? 0) }}</span> 条记录
+          共 <span class="font-medium text-foreground tabular">{{ list.data.value?.total ?? '0' }}</span> 条记录
         </p>
+        <p v-if="list.data.value" class="text-xs text-muted-foreground tabular">数据截至 {{ formatDateTime(list.data.value.asOf) }}</p>
       </div>
 
       <DataTable
@@ -116,7 +123,7 @@ const detailItems = computed(() => {
         :data="list.data.value?.items ?? []"
         :loading="list.loading.value"
         :error="list.error.value"
-        :row-key="(r: WebhookDelivery) => r.id"
+        :row-key="(r: WebhookDelivery) => `${r.appId}:${r.eventId}`"
         clickable
         empty-title="暂无通知记录"
         @row-click="(r: WebhookDelivery) => (selected = r)"
@@ -124,7 +131,7 @@ const detailItems = computed(() => {
       />
 
       <div class="border-t border-border px-4 py-3 sm:px-5">
-        <Pagination v-model:page="page" v-model:page-size="pageSize" :total="list.data.value?.total ?? 0" />
+        <Pagination v-model:page="page" v-model:page-size="pageSize" :total="list.data.value?.total ?? '0'" />
       </div>
     </Card>
 
@@ -132,33 +139,17 @@ const detailItems = computed(() => {
       <div v-if="selected" class="flex flex-col gap-6">
         <div class="flex items-center gap-2">
           <WebhookStatusBadge :status="selected.status" />
-          <span class="text-[13px] text-muted-foreground">共推送 {{ selected.attempts }} 次</span>
+          <span class="text-[13px] text-muted-foreground">已分配 {{ selected.allocatedAttempts }} 次投递</span>
         </div>
         <DescriptionList :items="detailItems" :cols="1">
           <template #eventId="{ item }">
             <span class="flex items-center gap-1 font-mono text-[13px]">{{ item.value }}<CopyButton :value="item.value!" /></span>
           </template>
-          <template #url="{ item }"><span class="break-all font-mono text-xs">{{ item.value }}</span></template>
           <template #resourceId="{ item }"><span class="font-mono text-[13px]">{{ item.value }}</span></template>
           <template #appId="{ item }"><span class="font-mono text-[13px]">{{ item.value }}</span></template>
           <template #eventType="{ item }"><span class="font-mono text-[13px]">{{ item.value }}</span></template>
+          <template #lastErrorCode="{ item }"><span class="font-mono text-[13px]">{{ item.value }}</span></template>
         </DescriptionList>
-
-        <section aria-labelledby="attempts-title">
-          <h3 id="attempts-title" class="mb-3 text-[13px] font-semibold">推送记录</h3>
-          <ol class="flex flex-col gap-2">
-            <li v-for="a in [...selected.attemptLog].reverse()" :key="a.attempt" class="rounded-lg border border-border p-3">
-              <div class="flex items-center justify-between gap-2 text-[13px]">
-                <span class="font-medium">第 {{ a.attempt }} 次</span>
-                <span :class="a.result === 'SUCCESS' ? 'text-success' : 'text-danger'" class="font-mono text-xs">
-                  {{ a.httpStatus ? `HTTP ${a.httpStatus}` : '无响应' }} · {{ a.durationMs }} ms
-                </span>
-              </div>
-              <p class="mt-1 text-xs text-muted-foreground tabular">{{ formatDateTime(a.at) }}</p>
-              <p v-if="a.errorSummary" class="mt-2 rounded bg-danger-soft px-2 py-1 font-mono text-xs text-danger">{{ a.errorSummary }}</p>
-            </li>
-          </ol>
-        </section>
       </div>
     </Drawer>
   </div>

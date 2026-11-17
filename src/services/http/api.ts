@@ -1,4 +1,13 @@
 import { GLOBAL_SEARCH_VIEW_VERSION, SEARCH_GROUP_STATES, SEARCH_GROUP_TYPES, type GlobalSearchView } from '@/types'
+import {
+  API_KEY_STATUSES,
+  DEVELOPER_READ_VIEW_VERSION,
+  WEBHOOK_DELIVERY_STATUSES,
+  type ApiKey,
+  type DeveloperPage,
+  type WebhookConfigView,
+  type WebhookDelivery,
+} from '@/types'
 import type { MerchantApi } from '@/services/api/types'
 import { ApiError } from '@/services/api/types'
 import type {
@@ -235,6 +244,93 @@ const isYmd = (v: unknown): v is string => typeof v === 'string' && YMD.test(v) 
 /** 时刻：ISO 8601，带 Z 或显式偏移（报表窗口可能按商户时区表达） */
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/
 const isInstant = (v: unknown): v is string => typeof v === 'string' && ISO_INSTANT.test(v) && !Number.isNaN(new Date(v).getTime())
+
+/* ---------- 开发者中心读取视图（portal-developer-read-view/0.1-draft） ---------- */
+
+const isInstantOrNull = (v: unknown) => v === null || isInstant(v)
+const isHttpStatusOrNull = (v: unknown) => v === null || isIntIn(v, 100, 599)
+
+function parseDeveloperPage<T>(
+  v: unknown,
+  rules: ItemRules,
+  what: string,
+  isConsistent: (item: Record<string, unknown>) => boolean,
+): DeveloperPage<T> {
+  if (!hasExactKeys(v, ['viewVersion', 'asOf', 'items', 'total', 'page', 'pageSize'])) throw malformed(what)
+  const { viewVersion, asOf, items, total, page, pageSize } = v
+  if (
+    viewVersion !== DEVELOPER_READ_VIEW_VERSION ||
+    !isInstant(asOf) ||
+    !isExactCount(total) ||
+    !isIntIn(page, 1, MAX_PAGE) ||
+    !isIntIn(pageSize, 1, 100) ||
+    !Array.isArray(items) ||
+    items.length > pageSize ||
+    BigInt(total) < BigInt((page - 1) * pageSize + items.length)
+  ) {
+    throw malformed(what)
+  }
+  for (const item of items) {
+    checkItem(item, rules, `${what}项`)
+    if (!isConsistent(item)) throw malformed(`${what}项`)
+  }
+  return v as unknown as DeveloperPage<T>
+}
+
+const API_KEY_RULES: ItemRules = {
+  appId: isNonEmptyString,
+  keyId: isNonEmptyString,
+  status: oneOf(...API_KEY_STATUSES),
+  createdAt: isInstant,
+  validFrom: isInstant,
+  validUntil: isInstantOrNull,
+  revokedAt: isInstantOrNull,
+}
+
+/** 仅 REVOKED 带 revokedAt；GRACE 必须给出截止时间 */
+const isConsistentKey = (appId: string) => (k: Record<string, unknown>) =>
+  k.appId === appId && (k.status === 'REVOKED') === (k.revokedAt !== null) && (k.status !== 'GRACE' || k.validUntil !== null)
+
+const isDeliveryResource = (v: unknown) =>
+  hasExactKeys(v, ['type', 'id']) && oneOf('payment', 'refund')(v.type) && isNonEmptyString(v.id)
+
+const DELIVERY_RULES: ItemRules = {
+  eventId: isNonEmptyString,
+  eventType: isNonEmptyString,
+  resource: isDeliveryResource,
+  appId: isNonEmptyString,
+  status: oneOf(...WEBHOOK_DELIVERY_STATUSES),
+  allocatedAttempts: isExactCount,
+  createdAt: isInstant,
+  nextAttemptAt: isInstantOrNull,
+  acknowledgedAt: isInstantOrNull,
+  lastHttpStatus: isHttpStatusOrNull,
+  lastErrorCode: isStrOrNull,
+}
+
+/** 只有 COMPLETED 带确认时间；等待重试必须给出下次投递时间 */
+const isConsistentDelivery = (d: Record<string, unknown>) =>
+  (d.status === 'COMPLETED') === (d.acknowledgedAt !== null) && (d.status !== 'RETRY_WAIT' || d.nextAttemptAt !== null)
+
+const isDeliveryFor = (resourceId: string) => (d: Record<string, unknown>) =>
+  isConsistentDelivery(d) && (d.resource as { id: string }).id === resourceId
+
+function parseWebhookConfigView(v: unknown, appId: string): WebhookConfigView {
+  if (!hasExactKeys(v, ['viewVersion', 'asOf', 'config']) || v.viewVersion !== DEVELOPER_READ_VIEW_VERSION || !isInstant(v.asOf)) {
+    throw malformed('Webhook 配置')
+  }
+  const c = v.config
+  if (
+    !hasExactKeys(c, ['appId', 'url', 'enabled']) ||
+    c.appId !== appId ||
+    typeof c.enabled !== 'boolean' ||
+    !(c.url === null || isNonEmptyString(c.url)) ||
+    (c.enabled && c.url === null)
+  ) {
+    throw malformed('Webhook 配置')
+  }
+  return v as unknown as WebhookConfigView
+}
 
 const METRIC_RULES: ItemRules = {
   successAmount: isAmount,
@@ -545,18 +641,42 @@ export const httpApi: MerchantApi = {
     get: async (appId) => parseSingle<AppViewSingle>(await request<unknown>(`/apps/${seg(appId)}`), APP_VIEW_VERSION, 'app', checkApp, 'App 详情'),
   },
   keys: {
-    list: (appId) => request('/api-keys', { query: { appId } }),
+    list: async (query) =>
+      parseDeveloperPage<ApiKey>(
+        await request<unknown>('/api-keys', { query: { ...query, viewVersion: DEVELOPER_READ_VIEW_VERSION } }),
+        API_KEY_RULES,
+        'API Key 列表',
+        isConsistentKey(query.appId),
+      ),
     create: (appId) => request(`/apps/${seg(appId)}/api-keys`, { method: 'POST' }),
-    rotate: (id) => request(`/api-keys/${seg(id)}/rotate`, { method: 'POST' }),
-    revoke: (id) => request(`/api-keys/${seg(id)}/revoke`, { method: 'POST' }),
+    rotate: (keyId) => request(`/api-keys/${seg(keyId)}/rotate`, { method: 'POST' }),
+    revoke: (keyId) => request(`/api-keys/${seg(keyId)}/revoke`, { method: 'POST' }),
   },
   webhooks: {
-    getConfig: (appId) => request(`/apps/${seg(appId)}/webhook`),
+    getConfig: async (appId) =>
+      parseWebhookConfigView(
+        await request<unknown>(`/apps/${seg(appId)}/webhook`, { query: { viewVersion: DEVELOPER_READ_VIEW_VERSION } }),
+        appId,
+      ),
     updateConfig: (appId, input) =>
-      request(`/apps/${seg(appId)}/webhook`, { method: 'PUT', body: { url: input.url, enabled: input.enabled, events: input.events } }),
+      request(`/apps/${seg(appId)}/webhook`, { method: 'PUT', body: { url: input.url, enabled: input.enabled } }),
     sendTest: (appId) => request(`/apps/${seg(appId)}/webhook/test`, { method: 'POST' }),
-    deliveries: (query) => request('/webhook-deliveries', { query: { ...query } }),
-    deliveriesFor: (resourceId) => request(`/webhook-deliveries/by-resource/${seg(resourceId)}`),
+    deliveries: async (query) =>
+      parseDeveloperPage<WebhookDelivery>(
+        await request<unknown>('/webhook-deliveries', { query: { ...query, viewVersion: DEVELOPER_READ_VIEW_VERSION } }),
+        DELIVERY_RULES,
+        'Webhook 投递记录',
+        isConsistentDelivery,
+      ),
+    deliveriesFor: async (resourceId, query) =>
+      parseDeveloperPage<WebhookDelivery>(
+        await request<unknown>(`/webhook-deliveries/by-resource/${seg(resourceId)}`, {
+          query: { ...query, viewVersion: DEVELOPER_READ_VIEW_VERSION },
+        }),
+        DELIVERY_RULES,
+        'Webhook 投递记录',
+        isDeliveryFor(resourceId),
+      ),
   },
   account: {
     merchant: async () =>

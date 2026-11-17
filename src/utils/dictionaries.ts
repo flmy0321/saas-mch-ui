@@ -127,10 +127,12 @@ export const APP_STATUS: Record<'ACTIVE' | 'DISABLED' | 'REVOKED', Meta> = {
 const viewUnknown = (v: string | null | undefined): Meta =>
   v ? { label: `未知(${v})`, tone: 'neutral', description: UNKNOWN_HINT } : { label: '—', tone: 'neutral' }
 
-export const WEBHOOK_STATUS: Record<'SUCCESS' | 'FAILED' | 'RETRYING', Meta> = {
-  SUCCESS: { label: '通知成功', tone: 'success' },
-  FAILED: { label: '通知失败', tone: 'danger' },
-  RETRYING: { label: '重试中', tone: 'warning' },
+export const WEBHOOK_STATUS: Record<'PENDING' | 'SENDING' | 'RETRY_WAIT' | 'COMPLETED' | 'EXHAUSTED', Meta> = {
+  PENDING: { label: '待投递', tone: 'neutral', description: '事件已入队，尚未开始投递' },
+  SENDING: { label: '投递中', tone: 'info', description: '正在向回调地址发送' },
+  RETRY_WAIT: { label: '等待重试', tone: 'warning', description: '上次投递未获 2xx 确认，将在下次投递时间重试' },
+  COMPLETED: { label: '已确认', tone: 'success', description: '回调地址已返回 2xx 确认' },
+  EXHAUSTED: { label: '投递失败', tone: 'danger', description: '投递次数已用尽，未获 2xx 确认' },
 }
 
 export const WEBHOOK_EVENT: Record<KnownWebhookEventType, string> = {
@@ -145,10 +147,8 @@ export const WEBHOOK_EVENT: Record<KnownWebhookEventType, string> = {
 
 export const API_KEY_STATUS: Record<ApiKeyStatus, Meta> = {
   ACTIVE: { label: '生效中', tone: 'success' },
-  PENDING: { label: '待生效', tone: 'info' },
-  EXPIRING: { label: '即将失效', tone: 'warning' },
+  GRACE: { label: '过渡期', tone: 'warning', description: '已被轮换，在有效期截止前仍可使用' },
   REVOKED: { label: '已撤销', tone: 'danger' },
-  EXPIRED: { label: '已失效', tone: 'neutral' },
 }
 
 export const APP_ENV: Record<AppEnv, Meta> = {

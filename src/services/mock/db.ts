@@ -4,7 +4,6 @@
  * 支付订单的已退款/退款中金额始终由退款记录汇总得出，Webhook 记录始终指向真实存在的订单或退款。
  */
 import type {
-  ApiKey,
   CurrentUser,
   LoginSession,
   AppView,
@@ -18,12 +17,53 @@ import type {
   RefundProgressEvent,
   RefundStatus,
   Store,
-  WebhookAttempt,
-  WebhookConfig,
-  WebhookDelivery,
-  WebhookDeliveryStatus,
   WebhookEventType,
 } from '@/types'
+
+/** Mock 内部行：保留演示所需的内部字段，只在接口边界转换为开发者中心读取视图 */
+export type ApiKeyRowStatus = 'ACTIVE' | 'PENDING' | 'EXPIRING' | 'REVOKED' | 'EXPIRED'
+export interface ApiKeyRow {
+  id: string
+  keyId: string
+  appId: string
+  status: ApiKeyRowStatus
+  maskedSecret: string
+  createdAt: string
+  effectiveAt: string
+  expireAt: string | null
+  lastUsedAt: string | null
+}
+export interface WebhookConfigRow {
+  appId: string
+  url: string
+  enabled: boolean
+  events: WebhookEventType[]
+  updatedAt: string | null
+}
+export type WebhookDeliveryRowStatus = 'SUCCESS' | 'FAILED' | 'RETRYING'
+export interface WebhookAttemptRow {
+  attempt: number
+  at: string
+  httpStatus: number | null
+  durationMs: number
+  result: 'SUCCESS' | 'FAILED'
+  errorSummary: string | null
+}
+export interface WebhookDeliveryRow {
+  id: string
+  eventId: string
+  eventType: WebhookEventType
+  resourceType: 'payment' | 'refund'
+  resourceId: string
+  appId: string
+  url: string
+  status: WebhookDeliveryRowStatus
+  attempts: number
+  lastAttemptAt: string
+  nextRetryAt: string | null
+  attemptLog: WebhookAttemptRow[]
+  isTest: boolean
+}
 
 type PaymentAmountKeys =
   | 'amount'
@@ -246,7 +286,7 @@ function businessTime(dayStart: number): number {
 
 export const payments: PaymentRow[] = []
 export const refunds: RefundRow[] = []
-export const webhookDeliveries: WebhookDelivery[] = []
+export const webhookDeliveries: WebhookDeliveryRow[] = []
 
 let orderSeq = 1
 
@@ -591,7 +631,7 @@ export const apps: AppView[] = [
 
 const hex = (n: number) => Array.from({ length: n }, () => '0123456789abcdef'[int(0, 15)]).join('')
 
-export const apiKeys: ApiKey[] = [
+export const apiKeys: ApiKeyRow[] = [
   {
     id: 'k1',
     keyId: `kid_${hex(12)}`,
@@ -649,7 +689,7 @@ export const apiKeys: ApiKey[] = [
   },
 ]
 
-export const webhookConfigs: WebhookConfig[] = [
+export const webhookConfigs: WebhookConfigRow[] = [
   {
     appId: 'app_9f3c2a71d40e8b15',
     url: 'https://pos.yunqi-mart.example/api/payhub/notify',
@@ -693,20 +733,20 @@ export function buildDelivery(
   resourceId: string,
   eventType: WebhookEventType,
   firstMs: number,
-  forcedStatus?: WebhookDeliveryStatus,
-): WebhookDelivery {
+  forcedStatus?: WebhookDeliveryRowStatus,
+): WebhookDeliveryRow {
   const appId = 'app_9f3c2a71d40e8b15'
   const url = webhookConfigs[0]!.url
   const status =
     forcedStatus ??
-    weighted<WebhookDeliveryStatus>([
+    weighted<WebhookDeliveryRowStatus>([
       ['SUCCESS', 91],
       ['FAILED', 5],
       ['RETRYING', NOW - firstMs < 2 * HOUR ? 4 : 0],
     ])
   const attempts = status === 'SUCCESS' ? weighted<number>([[1, 92], [2, 6], [3, 2]]) : status === 'FAILED' ? 8 : int(2, 4)
   const intervals = [0, 15, 15, 30, 180, 600, 1200, 3600].map((s) => s * 1000)
-  const attemptLog: WebhookAttempt[] = []
+  const attemptLog: WebhookAttemptRow[] = []
   let t = firstMs
   const err = pick(WEBHOOK_ERRORS)
   for (let i = 0; i < attempts; i++) {

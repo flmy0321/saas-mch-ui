@@ -52,6 +52,7 @@ import {
   type StoreStatsView,
   type TrendView,
 } from '@/types/report'
+import { DEVELOPER_READ_VIEW_VERSION, type DeveloperPage, type WebhookDelivery } from '@/types'
 import { fenToAmount, isAmountInput, toFen } from '@/utils/money'
 import { PRESENTATION_COMPARE_KEYS, SUCCESS_RATE_DIFFERENCE_KEY } from '@/utils/report'
 import { delay, getMockRefundFault } from './control'
@@ -79,6 +80,8 @@ import {
   toShanghaiWall,
   webhookConfigs,
   webhookDeliveries,
+  type ApiKeyRow,
+  type WebhookDeliveryRow,
   type PaymentRow,
   type RefundRow,
 } from './db'
@@ -512,6 +515,52 @@ async function createRefund(input: { paymentId: string; amount: string; merchant
 /* 其他                                                                 */
 /* ------------------------------------------------------------------ */
 
+function developerPage<T>(rows: T[], page = 1, pageSize = 20): DeveloperPage<T> {
+  const size = Math.min(Math.max(pageSize, 1), 100)
+  const p = Math.max(page, 1)
+  return {
+    viewVersion: DEVELOPER_READ_VIEW_VERSION,
+    asOf: asOf(),
+    items: rows.slice((p - 1) * size, p * size),
+    total: String(rows.length),
+    page: p,
+    pageSize: size,
+  }
+}
+
+function keyView(k: ApiKeyRow): ApiKey {
+  const revoked = k.status === 'REVOKED' || k.status === 'EXPIRED'
+  return {
+    appId: k.appId,
+    keyId: k.keyId,
+    status: revoked ? 'REVOKED' : k.status === 'EXPIRING' ? 'GRACE' : 'ACTIVE',
+    createdAt: k.createdAt,
+    validFrom: k.effectiveAt,
+    validUntil: k.expireAt,
+    revokedAt: revoked ? (k.expireAt ?? k.createdAt) : null,
+  }
+}
+
+const DELIVERY_STATUS_VIEW = { SUCCESS: 'COMPLETED', FAILED: 'EXHAUSTED', RETRYING: 'RETRY_WAIT' } as const
+
+function deliveryView(d: WebhookDeliveryRow): WebhookDelivery {
+  const last = d.attemptLog[d.attemptLog.length - 1]
+  const status = DELIVERY_STATUS_VIEW[d.status]
+  return {
+    eventId: d.eventId,
+    eventType: d.eventType,
+    resource: { type: d.resourceType, id: d.resourceId },
+    appId: d.appId,
+    status,
+    allocatedAttempts: String(d.attempts),
+    createdAt: d.attemptLog[0]?.at ?? d.lastAttemptAt,
+    nextAttemptAt: status === 'RETRY_WAIT' ? (d.nextRetryAt ?? d.lastAttemptAt) : null,
+    acknowledgedAt: status === 'COMPLETED' ? d.lastAttemptAt : null,
+    lastHttpStatus: last?.httpStatus ?? null,
+    lastErrorCode: last && last.result === 'FAILED' ? (last.httpStatus ? 'HTTP_NON_2XX' : 'NO_RESPONSE') : null,
+  }
+}
+
 function newSecret(env: 'production' | 'sandbox') {
   return `sk_${env === 'production' ? 'live' : 'test'}_${randomHex(40)}`
 }
@@ -522,7 +571,7 @@ function issueKey(appId: string): CreatedApiKey {
   if (app.status !== 'ACTIVE') fail('应用已停用，无法创建密钥', 'INVALID_STATUS', 409)
   const plain = newSecret(app.env === 'sandbox' ? 'sandbox' : 'production')
   const now = new Date().toISOString()
-  const key: ApiKey = {
+  const key: ApiKeyRow = {
     id: `k_${randomHex(8)}`,
     keyId: `kid_${randomHex(12)}`,
     appId,
@@ -534,7 +583,7 @@ function issueKey(appId: string): CreatedApiKey {
     lastUsedAt: null,
   }
   apiKeys.unshift(key)
-  return { ...key, plainSecret: plain }
+  return { ...keyView(key), plainSecret: plain }
 }
 
 function validateStore(input: { name: string; merchantStoreNo: string }, exceptId?: string) {
@@ -784,25 +833,27 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
   },
 
   keys: {
-    list: (appId) => delay(() => (appId ? apiKeys.filter((k) => k.appId === appId) : apiKeys)),
+    list: (q) =>
+      delay(() => developerPage(apiKeys.filter((k) => k.appId === q.appId).map(keyView), q.page, q.pageSize)),
     create: (appId) => delay(() => issueKey(appId), 600),
-    rotate: (id) =>
+    rotate: (keyId) =>
       delay(() => {
-        const old = apiKeys.find((k) => k.id === id)
+        const old = apiKeys.find((k) => k.keyId === keyId)
         if (!old) fail('密钥不存在', 'NOT_FOUND', 404)
         if (old.status === 'REVOKED' || old.status === 'EXPIRED') fail('该密钥已失效，无法轮换', 'INVALID_STATUS', 409)
+        if (old.status === 'EXPIRING') fail('该密钥处于过渡期，无法再次轮换', 'INVALID_STATUS', 409)
         const created = issueKey(old.appId)
         old.status = 'EXPIRING'
         old.expireAt = new Date(Date.now() + 1 * DAY).toISOString()
         return created
       }, 700),
-    revoke: (id) =>
+    revoke: (keyId) =>
       delay(() => {
-        const k = apiKeys.find((x) => x.id === id)
+        const k = apiKeys.find((x) => x.keyId === keyId)
         if (!k) fail('密钥不存在', 'NOT_FOUND', 404)
         k.status = 'REVOKED'
         k.expireAt = new Date().toISOString()
-        return k
+        return keyView(k)
       }, 500),
   },
 
@@ -811,15 +862,20 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
       delay(() => {
         const c = webhookConfigs.find((x) => x.appId === appId)
         if (!c) fail('Webhook 配置不存在', 'NOT_FOUND', 404)
-        return c
+        return {
+          viewVersion: DEVELOPER_READ_VIEW_VERSION,
+          asOf: asOf(),
+          config: { appId: c.appId, url: c.url || null, enabled: c.enabled },
+        }
       }),
     updateConfig: (appId, input) =>
       delay(() => {
         const c = webhookConfigs.find((x) => x.appId === appId)
         if (!c) fail('Webhook 配置不存在', 'NOT_FOUND', 404)
-        if (input.enabled && !/^https:\/\/[^\s]+$/.test(input.url)) fail('通知地址必须为 HTTPS 地址', 'VALIDATION', 400)
-        Object.assign(c, input, { updatedAt: new Date().toISOString() })
-        return c
+        if (input.enabled && input.url === null) fail('启用通知时必须填写回调地址', 'VALIDATION', 400)
+        if (input.url !== null && !/^https:\/\/[^\s]+$/.test(input.url)) fail('通知地址必须为 HTTPS 地址', 'VALIDATION', 400)
+        Object.assign(c, { url: input.url ?? '', enabled: input.enabled, updatedAt: new Date().toISOString() })
+        return { appId: c.appId, url: c.url || null, enabled: c.enabled }
       }, 500),
     sendTest: (appId) =>
       delay(() => {
@@ -831,15 +887,23 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
     deliveries: (q) =>
       delay(() => {
         const kw = q.keyword?.trim()
-        const rows = webhookDeliveries.filter((w) => {
+        const rows = webhookDeliveries.map(deliveryView).filter((w) => {
+          if (q.appId && w.appId !== q.appId) return false
           if (q.eventType && w.eventType !== q.eventType) return false
           if (q.status && w.status !== q.status) return false
-          if (kw && !w.eventId.includes(kw) && !w.resourceId.includes(kw)) return false
+          if (kw && !w.eventId.includes(kw) && !w.resource.id.includes(kw)) return false
           return true
         })
-        return paginate(rows, q.page, q.pageSize)
+        return developerPage(rows, q.page, q.pageSize)
       }),
-    deliveriesFor: (resourceId) => delay(() => webhookDeliveries.filter((w) => w.resourceId === resourceId)),
+    deliveriesFor: (resourceId, q) =>
+      delay(() =>
+        developerPage(
+          webhookDeliveries.filter((w) => w.resourceId === resourceId).map(deliveryView),
+          q?.page,
+          q?.pageSize,
+        ),
+      ),
   },
 
   account: {
