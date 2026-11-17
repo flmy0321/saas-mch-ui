@@ -18,15 +18,16 @@ import { buildPaymentColumns } from '@/pages/payments/paymentColumns'
 import { useSessionStore } from '@/stores/session'
 import { api } from '@/services/api'
 import { channelMeta } from '@/utils/dictionaries'
-import { formatDateTime, formatMoney, formatNumber, formatPercent, toDateInput } from '@/utils/format'
+import { formatDateTime, formatMoney, formatPercent, toDateInput } from '@/utils/format'
 import { formatCount, formatCountSum } from '@/utils/count'
 import { compareRatio, readPercent, successRateDifference, type CompareMetric } from '@/utils/report'
 import { fenToAmount, toFen } from '@/utils/money'
-import type { ChannelShare, PaymentListItem } from '@/types'
+import { chartPoint, dateLabel, reportErrorText } from '@/utils/reporting'
+import type { ChannelAmountItem, PaymentListItem, ReportWindowDays } from '@/types'
 
 const router = useRouter()
 const { user } = storeToRefs(useSessionStore())
-const days = ref<number>(7)
+const days = ref<ReportWindowDays>(7)
 const metric = ref<'amount' | 'count'>('amount')
 
 const summary = useAsync(() => api.dashboard.summary())
@@ -35,7 +36,7 @@ const share = useAsync(() => api.dashboard.channelShare(days.value), { watch: da
 const recent = useAsync(() => api.dashboard.recentPayments(8))
 
 const points = computed<SeriesPoint[]>(() =>
-  (trend.data.value?.points ?? []).map((p) => ({ ...p, label: p.date.slice(5).replace('-', '/') })),
+  (trend.data.value?.points ?? []).map((p) => chartPoint(dateLabel(p.date), p)),
 )
 const windowed = computed(() => points.value.slice(-days.value))
 
@@ -43,7 +44,9 @@ const charts = useTradeCharts()
 const trendOption = charts.amountTrend(windowed, metric)
 const rateOption = charts.successRate(points)
 const compareOption = charts.payVsRefund(windowed)
-const shares = computed<ChannelShare[]>(() => share.data.value?.items ?? [])
+const shares = computed<ChannelAmountItem[]>(() => share.data.value?.items ?? [])
+const trendError = computed(() => reportErrorText(trend))
+const shareError = computed(() => reportErrorText(share))
 const donutOption = charts.channelDonut(shares)
 const shareTotalFen = computed(() => shares.value.reduce((s, c) => s + (toFen(c.amount) ?? 0n), 0n))
 const shareTotal = computed(() => fenToAmount(shareTotalFen.value))
@@ -171,7 +174,7 @@ const dayOptions = [
         title="成功交易走势"
         :description="metric === 'amount' ? '按支付成功时间统计，单位：元' : '按支付成功时间统计，单位：笔'"
         :loading="trend.loading.value"
-        :error="trend.error.value"
+        :error="trendError"
         :empty="!windowed.length"
         :height="300"
         @retry="trend.reload()"
@@ -194,7 +197,7 @@ const dayOptions = [
         title="支付渠道占比"
         description="按成功交易金额"
         :loading="share.loading.value"
-        :error="share.error.value"
+        :error="shareError"
         :empty="!shares.length"
         :height="300"
         @retry="share.reload()"
@@ -211,7 +214,7 @@ const dayOptions = [
             <li v-for="c in shares" :key="c.channel" class="flex items-center gap-2 text-[13px]">
               <span class="size-2 rounded-sm" :style="{ background: c.channel === 'ALIPAY' ? charts.colors.value.chart1 : c.channel === 'WECHAT' ? charts.colors.value.chart2 : c.channel === 'UNIONPAY' ? charts.colors.value.chart3 : channelMeta(c.channel).color }" />
               <span class="flex-1">{{ channelMeta(c.channel).label }}</span>
-              <span class="text-muted-foreground tabular">{{ formatNumber(c.count) }} 笔</span>
+              <span class="text-muted-foreground tabular">{{ formatCount(c.count) }} 笔</span>
               <span class="w-14 text-right font-medium tabular">{{ sharePercent(c.amount) }}</span>
             </li>
           </ul>
@@ -222,7 +225,7 @@ const dayOptions = [
         title="支付成功率"
         description="近 30 天每日成功率"
         :loading="trend.loading.value"
-        :error="trend.error.value"
+        :error="trendError"
         :empty="!points.length"
         :height="240"
         @retry="trend.reload()"
@@ -235,7 +238,7 @@ const dayOptions = [
         title="支付与退款对比"
         description="单位：元"
         :loading="trend.loading.value"
-        :error="trend.error.value"
+        :error="trendError"
         :empty="!windowed.length"
         :height="240"
         @retry="trend.reload()"

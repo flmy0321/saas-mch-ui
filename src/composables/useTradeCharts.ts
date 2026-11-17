@@ -3,14 +3,15 @@ import { useChartTheme } from './useChartTheme'
 import { channelMeta } from '@/utils/dictionaries'
 import { formatNumber, formatPercent } from '@/utils/format'
 import { amountToChartNumber, formatMoney } from '@/utils/money'
-import type { AmountDecimal, ChannelShare } from '@/types'
+import type { AmountDecimal, ChannelAmountItem } from '@/types'
 
 export interface SeriesPoint {
   label: string
   successAmount: AmountDecimal
   refundAmount: AmountDecimal
   successCount: number
-  successRate: number
+  /** 后端 presentation.successRatePercent 的绘图值；null 表示该日不可计算，图上断开 */
+  successRatePercent: number | null
 }
 
 type TooltipParam = { axisValueLabel: string; marker: string; seriesName: string; value: number; dataIndex: number; seriesIndex: number }
@@ -65,15 +66,16 @@ export function useTradeCharts() {
   function successRate(points: Ref<SeriesPoint[]>) {
     return computed(() => {
       const c = colors.value
-      const rates = points.value.map((p) => +(p.successRate * 100).toFixed(2))
-      const min = rates.length ? Math.max(0, Math.floor(Math.min(...rates) - 3)) : 0
+      const rates = points.value.map((p) => p.successRatePercent)
+      const known = rates.filter((r): r is number => r !== null)
+      const min = known.length ? Math.max(0, Math.floor(Math.min(...known) - 3)) : 0
       return {
         ...base.value,
         tooltip: {
           ...base.value.tooltip,
           formatter: (ps: TooltipParam[]) =>
             `<div style="font-size:12px"><div style="opacity:.7">${ps[0]?.axisValueLabel}</div>${ps
-              .map((p) => row(p, formatPercent(p.value / 100)))
+              .map((p) => row(p, typeof p.value === 'number' ? formatPercent(p.value / 100) : '不可计算'))
               .join('')}</div>`,
         },
         xAxis: { ...base.value.xAxis, type: 'category', boundaryGap: false, data: points.value.map((p) => p.label) },
@@ -140,7 +142,7 @@ export function useTradeCharts() {
     })
   }
 
-  function channelDonut(shares: Ref<ChannelShare[]>) {
+  function channelDonut(shares: Ref<ChannelAmountItem[]>) {
     return computed(() => {
       const c = colors.value
       const palette: Record<string, string> = { ALIPAY: c.chart1, WECHAT: c.chart2, UNIONPAY: c.chart3 }

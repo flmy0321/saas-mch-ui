@@ -610,6 +610,8 @@ export interface ChannelShareReport {
   items: ChannelShare[]
 }
 
+export * from './report'
+
 export type Granularity = 'day' | 'week' | 'month'
 
 export interface AnalyticsQuery {

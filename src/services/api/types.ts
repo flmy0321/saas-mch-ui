@@ -1,10 +1,13 @@
 import type {
   AnalyticsQuery,
-  AnalyticsResult,
+  AnalyticsView,
+  ChannelShareView,
+  ReportWindowDays,
+  StoreStatsView,
+  TrendView,
   ApiKey,
   AuthTokens,
   Captcha,
-  ChannelShareReport,
   CreateRefundInput,
   CreatedApiKey,
   CurrentUser,
@@ -36,8 +39,6 @@ import type {
   Store,
   StoreInput,
   StoreQuery,
-  StoreStats,
-  TrendReport,
   WebhookConfig,
   WebhookDelivery,
   WebhookDeliveryQuery,
@@ -65,8 +66,8 @@ export interface MerchantApi {
   }
   dashboard: {
     summary(): Promise<DashboardSummaryView>
-    trend(days: number): Promise<TrendReport>
-    channelShare(days: number): Promise<ChannelShareReport>
+    trend(days: ReportWindowDays): Promise<TrendView>
+    channelShare(days: ReportWindowDays): Promise<ChannelShareView>
     recentPayments(limit: number): Promise<RecentPaymentsView>
   }
   payments: {
@@ -86,7 +87,8 @@ export interface MerchantApi {
     findByMerchantRefundNo(paymentId: string, merchantRefundNo: string): Promise<RefundViewSingle>
   }
   analytics: {
-    query(q: AnalyticsQuery): Promise<AnalyticsResult>
+    /** 按已完成营业日查询；未就绪时抛 REPORTING_* 错误码 */
+    query(q: AnalyticsQuery): Promise<AnalyticsView>
   }
   stores: {
     list(query: StoreQuery): Promise<StoreViewPage>
@@ -95,7 +97,8 @@ export interface MerchantApi {
     /** 解包 options().items，供登录后加载与各页门店筛选使用 */
     all(): Promise<StoreOption[]>
     get(id: string): Promise<StoreViewSingle>
-    stats(id: string): Promise<StoreStats>
+    /** storeCode 为平台门店号（storeNo）；窗口为最近 30 个已完成营业日 */
+    stats(storeCode: string): Promise<StoreStatsView>
     create(input: StoreInput): Promise<Store>
     update(id: string, input: StoreInput): Promise<Store>
   }

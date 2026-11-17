@@ -1,7 +1,5 @@
 import type {
-  AnalyticsBucket,
   ApiKey,
-  ChannelShare,
   CompareValue,
   CreatedApiKey,
   Granularity,
@@ -12,9 +10,7 @@ import type {
   Refund,
   RefundQuery,
   RefundableInfo,
-  StatMetrics,
   Store,
-  TrendPoint,
 } from '@/types'
 import {
   APP_VIEW_VERSION,
@@ -34,6 +30,20 @@ import {
   type StoreView,
 } from '@/types'
 import { ApiError, type ApiErrorInit, type MerchantApi } from '@/services/api/types'
+import type { ReportPresentation } from '@/types'
+import {
+  COMPLETED_REPORT_VIEW_VERSION,
+  DIRECTORY_MODE_OBSERVED_ONLY,
+  REPORT_WINDOW_DAYS,
+  type AnalyticsBucketView,
+  type AnalyticsView,
+  type ChannelAmountItem,
+  type ChannelShareView,
+  type CompletedReportBase,
+  type ReportPoint,
+  type StoreStatsView,
+  type TrendView,
+} from '@/types/report'
 import { fenToAmount, isAmountInput, toFen } from '@/utils/money'
 import { PRESENTATION_COMPARE_KEYS, SUCCESS_RATE_DIFFERENCE_KEY } from '@/utils/report'
 import { delay, getMockRefundFault } from './control'
@@ -299,19 +309,6 @@ function storeOptionsView(): StoreOptionsView {
   return { viewVersion: STORE_OPTIONS_VIEW_VERSION, items, total: items.length, complete: true, asOf: asOf() }
 }
 
-function metrics(a: Agg): StatMetrics {
-  return {
-    successAmount: fenToAmount(a.successAmount),
-    successCount: a.successCount,
-    refundAmount: fenToAmount(a.refundAmount),
-    refundCount: a.refundCount,
-    totalCount: a.totalCount,
-    terminalCount: a.terminalCount,
-    createdSuccessCount: a.createdSuccessCount,
-    successRate: rate(a),
-  }
-}
-
 /** 分母为 0 返回 null（展示“—”） */
 function ratio(cur: bigint | number, prev: bigint | number): CompareValue {
   const c = Number(cur)
@@ -319,14 +316,49 @@ function ratio(cur: bigint | number, prev: bigint | number): CompareValue {
   return p === 0 ? null : (c - p) / p
 }
 
-const avg = (a: Agg) => (a.successCount ? fenToAmount(a.successAmount / BigInt(a.successCount)) : '0.00')
+const pctOf = (v: CompareValue) => (v === null ? null : (v * 100).toFixed(2))
 
-function dailyTrend(days: number, f: StatFilter = {}): TrendPoint[] {
-  const today = startOfDay(NOW)
-  const out: TrendPoint[] = []
+function presentationOf(a: Agg, prev?: Agg): ReportPresentation {
+  const p: ReportPresentation = {
+    averageAmount: a.successCount ? fenToAmount(a.successAmount / BigInt(a.successCount)) : null,
+    successRatePercent: a.terminalCount ? (rate(a) * 100).toFixed(2) : null,
+  }
+  if (prev) {
+    p[PRESENTATION_COMPARE_KEYS.successAmount] = pctOf(ratio(a.successAmount, prev.successAmount))
+    p[PRESENTATION_COMPARE_KEYS.successCount] = pctOf(ratio(a.successCount, prev.successCount))
+    p[PRESENTATION_COMPARE_KEYS.refundAmount] = pctOf(ratio(a.refundAmount, prev.refundAmount))
+    p[PRESENTATION_COMPARE_KEYS.refundCount] = pctOf(ratio(a.refundCount, prev.refundCount))
+    p[SUCCESS_RATE_DIFFERENCE_KEY] =
+      prev.terminalCount && a.terminalCount ? ((rate(a) - rate(prev)) * 100).toFixed(1) : null
+  }
+  return p
+}
+
+/** 已完成营业日：截至昨日 */
+const lastCompletedDay = () => startOfDay(NOW) - DAY
+
+function completedBase(fromDay: number, toDay: number): CompletedReportBase {
+  return {
+    viewVersion: COMPLETED_REPORT_VIEW_VERSION,
+    asOf: asOf(),
+    timezone: 'Asia/Shanghai',
+    coverageStart: ymd(startOfDay(NOW) - 59 * DAY),
+    fromDate: ymd(fromDay),
+    toDate: ymd(toDay),
+  }
+}
+
+function assertWindowDays(days: number) {
+  if (!(REPORT_WINDOW_DAYS as readonly number[]).includes(days)) fail('统计窗口仅支持 7 或 30 天', 'INVALID_ARGUMENT', 400)
+}
+
+function completedPoints(days: number, f: StatFilter = {}): ReportPoint[] {
+  const last = lastCompletedDay()
+  const out: ReportPoint[] = []
   for (let i = days - 1; i >= 0; i--) {
-    const s = today - i * DAY
-    out.push({ date: ymd(s), ...metrics(aggregate(s, s + DAY - 1, f)) })
+    const s = last - i * DAY
+    const a = aggregate(s, s + DAY - 1, f)
+    out.push({ date: ymd(s), metrics: reportMetrics(a), presentation: presentationOf(a) })
   }
   return out
 }
@@ -347,7 +379,7 @@ function bucketStarts(from: number, to: number, g: Granularity): number[] {
   return starts
 }
 
-function channelShare(from: number, to: number, f: StatFilter = {}): ChannelShare[] {
+function channelShare(from: number, to: number, f: StatFilter = {}): ChannelAmountItem[] {
   const map = new Map<string, { amount: bigint; count: number }>()
   for (const ch of ['WECHAT', 'ALIPAY', 'UNIONPAY']) map.set(ch, { amount: 0n, count: 0 })
   for (const p of payments) {
@@ -361,7 +393,7 @@ function channelShare(from: number, to: number, f: StatFilter = {}): ChannelShar
     s.count++
     map.set(p.channel, s)
   }
-  return [...map.entries()].map(([channel, s]) => ({ channel, amount: fenToAmount(s.amount), count: s.count }))
+  return [...map.entries()].map(([channel, s]) => ({ channel, amount: fenToAmount(s.amount), count: String(s.count) }))
 }
 
 /* ------------------------------------------------------------------ */
@@ -540,9 +572,19 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
           },
         }
       }),
-    trend: (days) => delay(() => ({ asOf: asOf(), points: dailyTrend(Math.min(days, 60)) })),
+    trend: (days) =>
+      delay((): TrendView => {
+        assertWindowDays(days)
+        const last = lastCompletedDay()
+        return { ...completedBase(last - (days - 1) * DAY, last), points: completedPoints(days) }
+      }),
     channelShare: (days) =>
-      delay(() => ({ asOf: asOf(), items: channelShare(startOfDay(NOW) - (days - 1) * DAY, Date.now()) })),
+      delay((): ChannelShareView => {
+        assertWindowDays(days)
+        const last = lastCompletedDay()
+        const from = last - (days - 1) * DAY
+        return { ...completedBase(from, last), items: channelShare(from, last + DAY - 1) }
+      }),
     recentPayments: (limit) =>
       delay(() => ({
         viewVersion: RECENT_PAYMENTS_VIEW_VERSION,
@@ -610,41 +652,39 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
 
   analytics: {
     query: (q) =>
-      delay(() => {
+      delay((): AnalyticsView => {
         const from = dayStartMs(q.from)
-        const to = Math.min(dayEndMs(q.to), Date.now())
+        const toDay = Math.min(dayStartMs(q.to), lastCompletedDay())
+        if (from > toDay) fail('所选营业日尚未结束，暂无已完成数据', 'REPORTING_DAY_INCOMPLETE', 409)
+        const to = toDay + DAY - 1
         const f = { storeId: q.storeId, channel: q.channel }
         const starts = bucketStarts(from, to, q.granularity)
-        const buckets: AnalyticsBucket[] = starts.map((s, i) => {
+        const buckets: AnalyticsBucketView[] = starts.map((s, i) => {
           const e = (starts[i + 1] ?? to + 1) - 1
           const bs = Math.max(s, from)
           const be = Math.min(e, to)
           const a = aggregate(bs, be, f)
-          const d = new Date(s)
-          const key = q.granularity === 'month' ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}` : ymd(s)
-          const label =
-            q.granularity === 'month'
-              ? key
-              : q.granularity === 'week'
-                ? `${ymd(bs).slice(5)} 周`
-                : ymd(s).slice(5)
-          return { key, start: ymd(bs), end: ymd(be), label, ...metrics(a), avgAmount: avg(a) }
+          const key = q.granularity === 'month' ? ymd(s).slice(0, 7) : ymd(bs)
+          return { key, fromDate: ymd(bs), toDate: ymd(be), metrics: reportMetrics(a), presentation: presentationOf(a) }
         })
-        const t = aggregate(from, to, f)
+        const len = to - from + 1
+        const cur = aggregate(from, to, f)
+        const prev = aggregate(from - len, from - 1, f)
         const byStore = stores
-          .map((s) => {
-            const a = aggregate(from, to, { storeId: s.id, channel: q.channel })
-            return { storeId: s.id, storeName: s.name, fen: a.successAmount, count: a.successCount }
-          })
-          .filter((s) => !q.storeId || s.storeId === q.storeId)
-          .sort((a, b) => (b.fen > a.fen ? 1 : b.fen < a.fen ? -1 : 0))
-          .map(({ fen, ...rest }) => ({ ...rest, amount: fenToAmount(fen) }))
+          .filter((s) => !q.storeId || s.id === q.storeId)
+          .map((s) => ({ s, a: aggregate(from, to, { storeId: s.id, channel: q.channel }) }))
+          .filter(({ a }) => a.successCount > 0)
+          .sort((x, y) => (y.a.successAmount > x.a.successAmount ? 1 : y.a.successAmount < x.a.successAmount ? -1 : 0))
+          .map(({ s, a }) => ({ storeCode: s.storeNo, amount: fenToAmount(a.successAmount), count: String(a.successCount) }))
         return {
-          asOf: asOf(),
-          totals: { ...metrics(t), avgAmount: avg(t) },
+          ...completedBase(from, toDay),
+          current: { fromDate: ymd(from), toDate: ymd(toDay), metrics: reportMetrics(cur) },
+          previous: { fromDate: ymd(from - len), toDate: ymd(from - DAY), metrics: reportMetrics(prev) },
+          presentation: presentationOf(cur, prev),
           buckets,
           byChannel: channelShare(from, to, f),
           byStore,
+          directoryMode: DIRECTORY_MODE_OBSERVED_ONLY,
         }
       }, 450),
   },
@@ -664,18 +704,19 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
     options: () => delay(() => storeOptionsView(), 120),
     all: () => delay(() => storeOptionsView().items, 120),
     get: (id) => delay(() => ({ viewVersion: STORE_VIEW_VERSION, store: storeViewDto(findStore(id)), asOf: asOf() })),
-    stats: (id) =>
-      delay(() => {
-        findStore(id)
-        const from = startOfDay(NOW) - 29 * DAY
-        const a = aggregate(from, Date.now(), { storeId: id })
+    stats: (storeCode) =>
+      delay((): StoreStatsView => {
+        const s = stores.find((x) => x.storeNo === storeCode)
+        if (!s) fail('门店不存在', 'STORE_NOT_FOUND', 404)
+        const last = lastCompletedDay()
+        const from = last - 29 * DAY
+        const a = aggregate(from, last + DAY - 1, { storeId: s.id })
         return {
-          asOf: asOf(),
-          last30Amount: fenToAmount(a.successAmount),
-          last30Count: a.successCount,
-          last30RefundAmount: fenToAmount(a.refundAmount),
-          successRate: rate(a),
-          trend: dailyTrend(30, { storeId: id }),
+          ...completedBase(from, last),
+          storeId: s.storeNo,
+          metrics: reportMetrics(a),
+          presentation: presentationOf(a),
+          points: completedPoints(30, { storeId: s.id }),
         }
       }),
     create: (input) =>

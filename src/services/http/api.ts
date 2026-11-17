@@ -18,8 +18,13 @@ import type {
   RefundViewSingle,
   StoreViewPage,
   StoreViewSingle,
+  AnalyticsView,
+  ChannelShareView,
+  StoreStatsView,
+  TrendView,
 } from '@/types'
 import {
+  COMPLETED_REPORT_VIEW_VERSION,
   APP_VIEW_VERSION,
   DASHBOARD_SUMMARY_VIEW_VERSION,
   MERCHANT_PROFILE_VIEW_VERSION,
@@ -314,6 +319,124 @@ export function parseStoreOptions(v: unknown): StoreOptionsView {
   return v as unknown as StoreOptionsView
 }
 
+/* ---------- 已完成营业日报表：趋势 / 渠道占比 / 经营分析 / 门店统计 ---------- */
+
+const REPORT_BASE_KEYS = ['viewVersion', 'asOf', 'timezone', 'coverageStart', 'fromDate', 'toDate'] as const
+
+function checkReportBase(v: unknown, extra: readonly string[], what: string): asserts v is Record<string, unknown> {
+  if (
+    !hasExactKeys(v, [...REPORT_BASE_KEYS, ...extra]) ||
+    v.viewVersion !== COMPLETED_REPORT_VIEW_VERSION ||
+    !isInstant(v.asOf) ||
+    !isNonEmptyString(v.timezone) ||
+    !(v.coverageStart === null || isYmd(v.coverageStart) || isInstant(v.coverageStart)) ||
+    !isYmd(v.fromDate) ||
+    !isYmd(v.toDate) ||
+    v.fromDate > v.toDate
+  ) {
+    throw malformed(what)
+  }
+}
+
+const inWindow = (d: string, base: Record<string, unknown>) => d >= (base.fromDate as string) && d <= (base.toDate as string)
+
+/** 日序列：营业日唯一、升序，且落在报表窗口内 */
+function checkPoints(points: unknown, base: Record<string, unknown>, maxLen: number, what: string): void {
+  if (!Array.isArray(points) || points.length > maxLen) throw malformed(what)
+  let prev = ''
+  for (const p of points) {
+    if (!hasExactKeys(p, ['date', 'metrics', 'presentation']) || !isYmd(p.date) || p.date <= prev || !inWindow(p.date, base)) {
+      throw malformed(what)
+    }
+    prev = p.date
+    checkMetrics(p.metrics, what)
+    checkPresentation(p.presentation, what)
+  }
+}
+
+const CHANNEL_AMOUNT_RULES: ItemRules = { channel: isNonEmptyString, amount: isAmount, count: isExactCount }
+function checkChannelItems(items: unknown, what: string): void {
+  if (!Array.isArray(items)) throw malformed(what)
+  const seen = new Set<string>()
+  for (const i of items) {
+    checkItem(i, CHANNEL_AMOUNT_RULES, what)
+    if (seen.has(i.channel as string)) throw malformed(what)
+    seen.add(i.channel as string)
+  }
+}
+
+export function parseTrend(v: unknown, days: number): TrendView {
+  const what = '交易趋势'
+  checkReportBase(v, ['points'], what)
+  checkPoints(v.points, v, days, what)
+  return v as unknown as TrendView
+}
+
+export function parseChannelShare(v: unknown): ChannelShareView {
+  const what = '渠道占比'
+  checkReportBase(v, ['items'], what)
+  checkChannelItems(v.items, what)
+  return v as unknown as ChannelShareView
+}
+
+function checkAnalyticsPeriod(p: unknown, what: string): void {
+  if (!hasExactKeys(p, ['fromDate', 'toDate', 'metrics']) || !isYmd(p.fromDate) || !isYmd(p.toDate) || p.fromDate > p.toDate) {
+    throw malformed(what)
+  }
+  checkMetrics(p.metrics, what)
+}
+
+const ANALYTICS_MAX_BUCKETS = 400
+const STORE_AMOUNT_RULES: ItemRules = { storeCode: isStrOrNull, amount: isAmount, count: isExactCount }
+
+export function parseAnalytics(v: unknown): AnalyticsView {
+  const what = '经营分析'
+  checkReportBase(v, ['current', 'previous', 'presentation', 'buckets', 'byChannel', 'byStore', 'directoryMode'], what)
+  checkAnalyticsPeriod(v.current, what)
+  checkAnalyticsPeriod(v.previous, what)
+  checkPresentation(v.presentation, what)
+  if (!isNonEmptyString(v.directoryMode)) throw malformed(what)
+  if (!Array.isArray(v.buckets) || v.buckets.length > ANALYTICS_MAX_BUCKETS) throw malformed(what)
+  const keys = new Set<string>()
+  let prevFrom = ''
+  for (const b of v.buckets) {
+    if (
+      !hasExactKeys(b, ['key', 'fromDate', 'toDate', 'metrics', 'presentation']) ||
+      !isNonEmptyString(b.key) ||
+      keys.has(b.key) ||
+      !isYmd(b.fromDate) ||
+      !isYmd(b.toDate) ||
+      b.fromDate > b.toDate ||
+      b.fromDate <= prevFrom ||
+      !inWindow(b.fromDate, v) ||
+      !inWindow(b.toDate, v)
+    ) {
+      throw malformed(what)
+    }
+    keys.add(b.key)
+    prevFrom = b.fromDate
+    checkMetrics(b.metrics, what)
+    checkPresentation(b.presentation, what)
+  }
+  checkChannelItems(v.byChannel, what)
+  if (!Array.isArray(v.byStore)) throw malformed(what)
+  for (const s of v.byStore) checkItem(s, STORE_AMOUNT_RULES, what)
+  return v as unknown as AnalyticsView
+}
+
+const STORE_STATS_DAYS = 30
+export function parseStoreStats(v: unknown): StoreStatsView {
+  const what = '门店统计'
+  checkReportBase(v, ['storeId', 'metrics', 'presentation', 'points'], what)
+  if (!isNonEmptyString(v.storeId)) throw malformed(what)
+  checkMetrics(v.metrics, what)
+  checkPresentation(v.presentation, what)
+  checkPoints(v.points, v, STORE_STATS_DAYS, what)
+  return v as unknown as StoreStatsView
+}
+
+const REPORT_QUERY = { viewVersion: COMPLETED_REPORT_VIEW_VERSION }
+
 /**
  * 真实 HTTP 实现（/api/portal/v1，identity-http v0.2 + 网页接口 v1.4 草案）。
  * captcha → login → select-merchant 由同一浏览器同源发出，服务端以 HttpOnly 匿名挑战 Cookie 绑定；
@@ -345,8 +468,8 @@ export const httpApi: MerchantApi = {
   dashboard: {
     summary: async () =>
       parseDashboardSummary(await request<unknown>('/dashboard/summary', { query: { viewVersion: DASHBOARD_SUMMARY_VIEW_VERSION } })),
-    trend: (days) => request('/dashboard/trend', { query: { days } }),
-    channelShare: (days) => request('/dashboard/channel-share', { query: { days } }),
+    trend: async (days) => parseTrend(await request<unknown>('/dashboard/trend', { query: { days, ...REPORT_QUERY } }), days),
+    channelShare: async (days) => parseChannelShare(await request<unknown>('/dashboard/channel-share', { query: { days, ...REPORT_QUERY } })),
     recentPayments: async (limit) =>
       parseRecentPayments(
         await request<unknown>('/dashboard/recent-payments', { query: { limit, viewVersion: RECENT_PAYMENTS_VIEW_VERSION } }),
@@ -377,14 +500,14 @@ export const httpApi: MerchantApi = {
       ),
   },
   analytics: {
-    query: (q) => request('/analytics', { query: { ...q } }),
+    query: async (q) => parseAnalytics(await request<unknown>('/analytics', { query: { ...q, ...REPORT_QUERY } })),
   },
   stores: {
     list: async (query) => parsePage<StoreViewPage>(await request<unknown>('/stores', { query: { ...query } }), STORE_VIEW_VERSION, checkStore, '门店列表'),
     options: async () => parseStoreOptions(await request<unknown>('/stores/options', { query: { viewVersion: STORE_OPTIONS_VIEW_VERSION } })),
     all: async () => (await httpApi.stores.options()).items,
     get: async (id) => parseSingle<StoreViewSingle>(await request<unknown>(`/stores/${seg(id)}`), STORE_VIEW_VERSION, 'store', checkStore, '门店详情'),
-    stats: (id) => request(`/stores/${seg(id)}/stats`),
+    stats: async (storeCode) => parseStoreStats(await request<unknown>(`/stores/${seg(storeCode)}/stats`, { query: REPORT_QUERY })),
     create: (input) => request('/stores', { method: 'POST', body: input }),
     update: (id, input) => request(`/stores/${seg(id)}`, { method: 'PUT', body: input }),
   },

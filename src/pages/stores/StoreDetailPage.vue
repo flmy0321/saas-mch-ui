@@ -19,7 +19,9 @@ import { useTradeCharts, type SeriesPoint } from '@/composables/useTradeCharts'
 import { buildPaymentColumns } from '@/pages/payments/paymentColumns'
 import { api } from '@/services/api'
 import { storeViewStatusMeta } from '@/utils/dictionaries'
-import { formatDateTime, formatMoney, formatNumber, formatPercent } from '@/utils/format'
+import { formatDateTime, formatMoney } from '@/utils/format'
+import { formatCount } from '@/utils/count'
+import { chartPoint, dateLabel, reportErrorText, successRateText } from '@/utils/reporting'
 import type { PaymentListItem } from '@/types'
 
 const route = useRoute()
@@ -27,15 +29,22 @@ const router = useRouter()
 const id = computed(() => String(route.params.id))
 
 const store = useAsync(() => api.stores.get(id.value))
-const stats = useAsync(() => api.stores.stats(id.value))
-const recent = useAsync(() => api.payments.list({ storeId: id.value, page: 1, pageSize: 8 }))
-
 const s = computed(() => store.data.value?.store ?? null)
+const storeCode = computed(() => s.value?.storeNo ?? null)
+const stats = useAsync(
+  async () => {
+    if (!storeCode.value) return null
+    return api.stores.stats(storeCode.value)
+  },
+  { watch: storeCode, immediate: false },
+)
+const recent = useAsync(() => api.payments.list({ storeId: id.value, page: 1, pageSize: 8 }))
+const statsError = computed(() => reportErrorText(stats))
 const statusMeta = computed(() => storeViewStatusMeta(s.value?.status))
 const st = computed(() => stats.data.value)
 const notFound = computed(() => store.error.value?.includes('不存在'))
 
-const points = computed<SeriesPoint[]>(() => (st.value?.trend ?? []).map((p) => ({ ...p, label: p.date.slice(5).replace('-', '/') })))
+const points = computed<SeriesPoint[]>(() => (st.value?.points ?? []).map((p) => chartPoint(dateLabel(p.date), p)))
 const metric = ref<'amount' | 'count'>('amount')
 const trendOption = useTradeCharts().amountTrend(points, metric)
 
@@ -79,12 +88,15 @@ const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'merchant
         </template>
       </PageHeader>
 
-      <section aria-label="近 30 天指标" class="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <MetricCard label="近 30 天成功金额" :loading="!st" :value="st ? formatMoney(st.last30Amount) : undefined" />
-        <MetricCard label="近 30 天成功笔数" :loading="!st" :value="st ? formatNumber(st.last30Count) : undefined" />
-        <MetricCard label="近 30 天退款金额" :loading="!st" :value="st ? formatMoney(st.last30RefundAmount) : undefined" />
-        <MetricCard label="支付成功率" :loading="!st" :value="st ? formatPercent(st.successRate) : undefined" />
+      <section aria-label="近 30 个已完成营业日指标" class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <MetricCard label="近 30 天成功金额" :loading="!st && !statsError" :value="st ? formatMoney(st.metrics.successAmount) : statsError ? '—' : undefined" />
+        <MetricCard label="近 30 天成功笔数" :loading="!st && !statsError" :value="st ? formatCount(st.metrics.successCount) : statsError ? '—' : undefined" />
+        <MetricCard label="近 30 天退款金额" :loading="!st && !statsError" :value="st ? formatMoney(st.metrics.refundAmount) : statsError ? '—' : undefined" />
+        <MetricCard label="支付成功率" :loading="!st && !statsError" :value="st ? successRateText(st.presentation) : statsError ? '—' : undefined" />
       </section>
+      <p v-if="st" class="-mt-2 text-xs text-muted-foreground">
+        统计已完成营业日 {{ st.fromDate }} 至 {{ st.toDate }}（{{ st.timezone }}），数据截至 {{ st.asOf }}
+      </p>
 
       <div class="grid gap-5 xl:grid-cols-3">
         <ChartCard
@@ -92,7 +104,7 @@ const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'merchant
           title="近 30 天成功交易"
           description="单位：元"
           :loading="stats.loading.value"
-          :error="stats.error.value"
+          :error="statsError"
           :empty="!points.length"
           :height="260"
           @retry="stats.reload()"
