@@ -19,8 +19,8 @@ import { useSessionStore } from '@/stores/session'
 import { api } from '@/services/api'
 import { channelMeta } from '@/utils/dictionaries'
 import { formatDateTime, formatMoney, formatNumber, formatPercent, toDateInput } from '@/utils/format'
-import { formatCount } from '@/utils/count'
-import { compareRatio, readPercent, type CompareMetric } from '@/utils/report'
+import { formatCount, formatCountSum } from '@/utils/count'
+import { compareRatio, readPercent, successRateDifference, type CompareMetric } from '@/utils/report'
 import { fenToAmount, toFen } from '@/utils/money'
 import type { ChannelShare, PaymentListItem } from '@/types'
 
@@ -72,6 +72,7 @@ const s = computed(() => summary.data.value)
 /** 比较值只读后端 presentation；缺失或 null 时 MetricCard 显示“—”，表示不可比较 */
 const cmp = (m: CompareMetric) => (s.value ? compareRatio(s.value.presentation, m) : undefined)
 const successRate = computed(() => (s.value ? readPercent(s.value.presentation, 'successRatePercent') : null))
+const rateDiff = computed(() => (s.value ? successRateDifference(s.value.presentation) : undefined))
 const avgHint = computed(() => {
   const avg = s.value?.presentation.averageAmount
   return typeof avg === 'string' ? `笔均 ${formatMoney(avg)}` : undefined
@@ -131,7 +132,8 @@ const dayOptions = [
           :icon="CircleCheck"
           :loading="summary.loading.value && !s"
           :value="s ? (successRate === null ? '不可计算' : `${successRate}%`) : undefined"
-          :delta="cmp('successRate')"
+          :delta="rateDiff === undefined ? undefined : rateDiff === null ? null : rateDiff.sign"
+          :delta-text="rateDiff ? rateDiff.text : undefined"
           delta-label="较昨日"
           hint="成功笔数 / 已终态笔数（后端口径）"
         />
@@ -150,7 +152,7 @@ const dayOptions = [
           label="处理中"
           :icon="Clock"
           :loading="summary.loading.value && !s"
-          :value="s ? formatCount(s.processing.totalCount) : undefined"
+          :value="s ? formatCountSum(s.processing.totalCount) : undefined"
           :hint="s ? `支付中 ${formatCount(s.processing.payingCount)} · 退款处理中 ${formatCount(s.processing.refundProcessingCount)}` : undefined"
           interactive
           @select="router.push({ path: '/payments', query: { status: 'PAYING' } })"

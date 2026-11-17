@@ -30,7 +30,7 @@ import {
   REFUND_VIEW_VERSION,
   STORE_VIEW_VERSION,
 } from '@/types'
-import { isExactCount, MAX_PAGE } from '@/utils/count'
+import { isCountSum, isExactCount, MAX_PAGE } from '@/utils/count'
 import { isConsistentPage } from '@/utils/page'
 import { request, seg } from './client'
 
@@ -252,7 +252,8 @@ export function checkPresentation(v: unknown, what: string): void {
 function checkPeriod(v: unknown, what: string): void {
   if (!hasExactKeys(v, ['date', 'fromInclusive', 'toExclusive', 'metrics'])) throw malformed(what)
   if (!isYmd(v.date) || !isInstant(v.fromInclusive) || !isInstant(v.toExclusive)) throw malformed(what)
-  if (new Date(v.fromInclusive).getTime() >= new Date(v.toExclusive).getTime()) throw malformed(what)
+  // 营业日刚开始（午夜）时窗口为零宽，from === to 合法；只拒绝倒置
+  if (new Date(v.fromInclusive).getTime() > new Date(v.toExclusive).getTime()) throw malformed(what)
   checkMetrics(v.metrics, what)
 }
 
@@ -269,7 +270,7 @@ export function parseDashboardSummary(v: unknown): DashboardSummaryView {
   }
   checkPeriod(v.current, what)
   checkPeriod(v.previous, what)
-  checkItem(v.processing, { payingCount: isExactCount, refundProcessingCount: isExactCount, totalCount: isExactCount }, what)
+  checkItem(v.processing, { payingCount: isExactCount, refundProcessingCount: isExactCount, totalCount: isCountSum }, what)
   checkPresentation(v.presentation, what)
   return v as unknown as DashboardSummaryView
 }
@@ -292,22 +293,23 @@ export function parseRecentPayments(v: unknown, limit: number): RecentPaymentsVi
 const STORE_OPTION_RULES: ItemRules = {
   id: isNonEmptyString, storeNo: isNonEmptyString, merchantStoreNo: isStrOrNull, name: isStr, status: isNonEmptyString,
 }
+const STORE_OPTIONS_MAX_ITEMS = 100
 export function parseStoreOptions(v: unknown): StoreOptionsView {
   const what = '门店选项'
   if (
     !hasExactKeys(v, ['viewVersion', 'items', 'total', 'complete', 'asOf']) ||
     v.viewVersion !== STORE_OPTIONS_VIEW_VERSION ||
-    !isExactCount(v.total) ||
+    !isIntIn(v.total, 0, Number.MAX_SAFE_INTEGER) ||
     typeof v.complete !== 'boolean' ||
     !isInstant(v.asOf) ||
-    !Array.isArray(v.items)
+    !Array.isArray(v.items) ||
+    v.items.length > STORE_OPTIONS_MAX_ITEMS
   ) {
     throw malformed(what)
   }
-  const total = BigInt(v.total)
-  const count = BigInt(v.items.length)
-  // complete=true 时 items 必须是全集；否则 items 不得多于 total
-  if (v.complete ? count !== total : count > total) throw malformed(what)
+  // total 为 JSON 数字；complete=true 时 items 必须是全集，否则 items 不得多于 total
+  const count = v.items.length
+  if (v.complete ? count !== v.total : count > v.total) throw malformed(what)
   for (const item of v.items) checkItem(item, STORE_OPTION_RULES, '门店选项项')
   return v as unknown as StoreOptionsView
 }

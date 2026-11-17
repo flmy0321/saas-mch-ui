@@ -10,6 +10,8 @@ const props = defineProps<{
   value?: string
   delta?: number | null
   deltaLabel?: string
+  /** 覆盖默认的比例格式化（如百分点差），delta 仍决定方向与配色 */
+  deltaText?: string
   /** 为 true 时，增长代表负面（如退款金额） */
   invertDelta?: boolean
   icon?: Component
@@ -57,7 +59,7 @@ const good = computed(() => (props.delta ?? 0) >= 0 !== !!props.invertDelta)
         >
           <TrendingUp v-if="delta >= 0" class="size-3.5" aria-hidden="true" />
           <TrendingDown v-else class="size-3.5" aria-hidden="true" />
-          {{ formatDelta(delta) }}
+          {{ deltaText ?? formatDelta(delta) }}
         </span>
         <span>{{ deltaLabel ?? hint }}</span>
       </p>

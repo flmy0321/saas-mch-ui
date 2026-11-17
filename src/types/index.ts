@@ -528,7 +528,8 @@ export interface DashboardSummaryView {
   coverageStart: string | null
   current: DashboardPeriod
   previous: DashboardPeriod
-  processing: { payingCount: ExactCount; refundProcessingCount: ExactCount; totalCount: ExactCount }
+  /** totalCount 为两个 uint64 之和，上限 2 × UINT64_MAX，不能按单个 ExactCount 校验或格式化 */
+  processing: { payingCount: ExactCount; refundProcessingCount: ExactCount; totalCount: string }
   presentation: ReportPresentation
 }
 
@@ -549,7 +550,8 @@ export interface StoreOption {
 export interface StoreOptionsView {
   viewVersion: typeof STORE_OPTIONS_VIEW_VERSION
   items: StoreOption[]
-  total: ExactCount
+  /** JSON 非负安全整数（Portal 取自 items.length，0–100），不是精确计数字符串 */
+  total: number
   /** false 表示只返回了部分门店，筛选器需提示不完整 */
   complete: boolean
   asOf: string

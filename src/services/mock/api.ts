@@ -35,7 +35,7 @@ import {
 } from '@/types'
 import { ApiError, type ApiErrorInit, type MerchantApi } from '@/services/api/types'
 import { fenToAmount, isAmountInput, toFen } from '@/utils/money'
-import { PRESENTATION_COMPARE_KEYS } from '@/utils/report'
+import { PRESENTATION_COMPARE_KEYS, SUCCESS_RATE_DIFFERENCE_KEY } from '@/utils/report'
 import { delay, getMockRefundFault } from './control'
 import { assertAuthenticated, mockAuth, mockIdentitySessions } from './auth'
 import {
@@ -296,7 +296,7 @@ function period(dayStart: number, a: Agg) {
 
 function storeOptionsView(): StoreOptionsView {
   const items = stores.map((s) => ({ id: s.id, storeNo: s.storeNo, merchantStoreNo: s.merchantStoreNo || null, name: s.name, status: s.status }))
-  return { viewVersion: STORE_OPTIONS_VIEW_VERSION, items, total: String(items.length), complete: true, asOf: asOf() }
+  return { viewVersion: STORE_OPTIONS_VIEW_VERSION, items, total: items.length, complete: true, asOf: asOf() }
 }
 
 function metrics(a: Agg): StatMetrics {
@@ -535,8 +535,8 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
             [PRESENTATION_COMPARE_KEYS.successCount]: pct(ratio(cur.successCount, prev.successCount)),
             [PRESENTATION_COMPARE_KEYS.refundAmount]: pct(ratio(cur.refundAmount, prev.refundAmount)),
             [PRESENTATION_COMPARE_KEYS.refundCount]: pct(ratio(cur.refundCount, prev.refundCount)),
-            [PRESENTATION_COMPARE_KEYS.successRate]:
-              prevRate === null || prevRate === 0 || !cur.terminalCount ? null : pct((rate(cur) - prevRate) / prevRate),
+            [SUCCESS_RATE_DIFFERENCE_KEY]:
+              prevRate === null || !cur.terminalCount ? null : ((rate(cur) - prevRate) * 100).toFixed(1),
           },
         }
       }),

@@ -32,6 +32,16 @@ export function formatCount(total: CountInput): string {
   return toBig(total).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
+/** 两个 uint64 计数之和（如处理中合计 = 支付中 + 退款处理中），上限 2 × UINT64_MAX */
+const COUNT_SUM_MAX = UINT64_MAX * 2n
+export function isCountSum(v: unknown): v is string {
+  return typeof v === 'string' && EXACT_COUNT.test(v) && BigInt(v) <= COUNT_SUM_MAX
+}
+export function formatCountSum(v: string): string {
+  if (!isCountSum(v)) throw new TypeError(`invalid count sum: ${v}`)
+  return BigInt(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
 /** 精确总页数 = ceil(total / pageSize)，至少 1 */
 export function exactPageCount(total: CountInput, pageSize: number): bigint {
   if (!Number.isSafeInteger(pageSize) || pageSize < 1) throw new TypeError(`invalid pageSize: ${pageSize}`)
