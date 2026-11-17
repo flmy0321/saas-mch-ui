@@ -6,7 +6,6 @@ import type {
   CreatedApiKey,
   Granularity,
   Paginated,
-  Payment,
   PaymentListItem,
   PaymentListPage,
   PaymentQuery,
@@ -19,17 +18,24 @@ import type {
 } from '@/types'
 import {
   APP_VIEW_VERSION,
+  DASHBOARD_SUMMARY_VIEW_VERSION,
   MERCHANT_PROFILE_VIEW_VERSION,
   PAYMENT_DETAIL_VIEW_VERSION,
   PAYMENT_LIST_VIEW_VERSION,
+  RECENT_PAYMENTS_VIEW_VERSION,
   REFUND_VIEW_VERSION,
+  STORE_OPTIONS_VIEW_VERSION,
   STORE_VIEW_VERSION,
   type AppView,
+  type DashboardSummaryView,
+  type ReportMetrics,
+  type StoreOptionsView,
   type RefundView,
   type StoreView,
 } from '@/types'
 import { ApiError, type ApiErrorInit, type MerchantApi } from '@/services/api/types'
 import { fenToAmount, isAmountInput, toFen } from '@/utils/money'
+import { PRESENTATION_COMPARE_KEYS } from '@/utils/report'
 import { delay, getMockRefundFault } from './control'
 import { assertAuthenticated, mockAuth, mockIdentitySessions } from './auth'
 import {
@@ -76,19 +82,6 @@ function fail(message: string, code: string, httpStatus: number, extra: Omit<Api
 /* ------------------------------------------------------------------ */
 /* DTO 边界：内部 BigInt 分 → AmountDecimal 字符串                        */
 /* ------------------------------------------------------------------ */
-
-function paymentDto(p: PaymentRow): Payment {
-  const { scope: _scope, pinnedEligibility: _pinned, ...rest } = p
-  return {
-    ...rest,
-    amount: fenToAmount(p.amount),
-    paidAmount: amt(p.paidAmount),
-    refundedAmount: fenToAmount(p.refundedAmount),
-    refundingAmount: fenToAmount(p.refundingAmount),
-    refundPrincipalLimit: amt(p.refundPrincipalLimit),
-    availableRefundAmount: amt(p.availableRefundAmount),
-  }
-}
 
 /** Mock 数据不变量：列表必需字段缺失时直接报错，不以默认值伪装 */
 function required<T>(v: T | null, field: string, id: string): T {
@@ -282,6 +275,29 @@ function aggregate(from: number, to: number, f: StatFilter = {}): Agg {
 }
 
 const rate = (a: Agg) => (a.terminalCount ? a.createdSuccessCount / a.terminalCount : 0)
+
+function reportMetrics(a: Agg): ReportMetrics {
+  return {
+    successAmount: fenToAmount(a.successAmount),
+    successCount: String(a.successCount),
+    refundAmount: fenToAmount(a.refundAmount),
+    refundCount: String(a.refundCount),
+    totalCount: String(a.totalCount),
+    terminalCount: String(a.terminalCount),
+    createdSuccessCount: String(a.createdSuccessCount),
+  }
+}
+
+/** 营业日窗口 [当日 00:00, 次日 00:00)，按 +08:00 表达 */
+function period(dayStart: number, a: Agg) {
+  const iso = (t: number) => new Date(t + 8 * 3600_000).toISOString().replace('Z', '+08:00')
+  return { date: ymd(dayStart), fromInclusive: iso(dayStart), toExclusive: iso(dayStart + DAY), metrics: reportMetrics(a) }
+}
+
+function storeOptionsView(): StoreOptionsView {
+  const items = stores.map((s) => ({ id: s.id, storeNo: s.storeNo, merchantStoreNo: s.merchantStoreNo || null, name: s.name, status: s.status }))
+  return { viewVersion: STORE_OPTIONS_VIEW_VERSION, items, total: String(items.length), complete: true, asOf: asOf() }
+}
 
 function metrics(a: Agg): StatMetrics {
   return {
@@ -491,37 +507,48 @@ function validateStore(input: { name: string; merchantStoreNo: string }, exceptI
 const protectedApi: Omit<MerchantApi, 'auth'> = {
   dashboard: {
     summary: () =>
-      delay(() => {
+      delay((): DashboardSummaryView => {
         const today = startOfDay(NOW)
         const now = Date.now()
         const cur = aggregate(today, now)
-        const prev = aggregate(today - DAY, now - DAY)
+        const prev = aggregate(today - DAY, today - 1)
         const prevRate = prev.terminalCount ? rate(prev) : null
+        const pct = (v: CompareValue) => (v === null ? null : (v * 100).toFixed(2))
+        const paying = payments.filter((p) => p.status === 'PAYING' || p.status === 'CREATED' || p.status === 'CLOSING').length
+        const refundProcessing = refunds.filter((r) => r.status === 'PROCESSING').length
         return {
+          viewVersion: DASHBOARD_SUMMARY_VIEW_VERSION,
           asOf: asOf(),
-          todaySuccessAmount: fenToAmount(cur.successAmount),
-          todaySuccessCount: cur.successCount,
-          todayRefundAmount: fenToAmount(cur.refundAmount),
-          todayRefundCount: cur.refundCount,
-          todayTotalCount: cur.totalCount,
-          todayTerminalCount: cur.terminalCount,
-          todayCreatedSuccessCount: cur.createdSuccessCount,
-          todaySuccessRate: rate(cur),
-          processingCount: payments.filter((p) => p.status === 'PAYING' || p.status === 'CREATED' || p.status === 'CLOSING').length,
-          compare: {
-            successAmount: ratio(cur.successAmount, prev.successAmount),
-            successCount: ratio(cur.successCount, prev.successCount),
-            refundAmount: ratio(cur.refundAmount, prev.refundAmount),
-            refundCount: ratio(cur.refundCount, prev.refundCount),
-            // 协议：相对变化 (cur - prev) / prev；任一分母为 0 返回 null
-            successRate: prevRate === null || prevRate === 0 || !cur.terminalCount ? null : (rate(cur) - prevRate) / prevRate,
+          timezone: 'Asia/Shanghai',
+          coverageStart: ymd(today - 59 * DAY),
+          current: period(today, cur),
+          previous: period(today - DAY, prev),
+          processing: {
+            payingCount: String(paying),
+            refundProcessingCount: String(refundProcessing),
+            totalCount: String(paying + refundProcessing),
+          },
+          presentation: {
+            averageAmount: cur.successCount ? fenToAmount(cur.successAmount / BigInt(cur.successCount)) : null,
+            successRatePercent: cur.terminalCount ? (rate(cur) * 100).toFixed(2) : null,
+            [PRESENTATION_COMPARE_KEYS.successAmount]: pct(ratio(cur.successAmount, prev.successAmount)),
+            [PRESENTATION_COMPARE_KEYS.successCount]: pct(ratio(cur.successCount, prev.successCount)),
+            [PRESENTATION_COMPARE_KEYS.refundAmount]: pct(ratio(cur.refundAmount, prev.refundAmount)),
+            [PRESENTATION_COMPARE_KEYS.refundCount]: pct(ratio(cur.refundCount, prev.refundCount)),
+            [PRESENTATION_COMPARE_KEYS.successRate]:
+              prevRate === null || prevRate === 0 || !cur.terminalCount ? null : pct((rate(cur) - prevRate) / prevRate),
           },
         }
       }),
     trend: (days) => delay(() => ({ asOf: asOf(), points: dailyTrend(Math.min(days, 60)) })),
     channelShare: (days) =>
       delay(() => ({ asOf: asOf(), items: channelShare(startOfDay(NOW) - (days - 1) * DAY, Date.now()) })),
-    recentPayments: (limit) => delay(() => payments.slice(0, limit).map(paymentDto)),
+    recentPayments: (limit) =>
+      delay(() => ({
+        viewVersion: RECENT_PAYMENTS_VIEW_VERSION,
+        items: payments.slice(0, Math.min(Math.max(limit, 1), 20)).map(paymentListItemDto),
+        asOf: asOf(),
+      })),
   },
 
   payments: {
@@ -634,7 +661,8 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
         })
         return viewPage(STORE_VIEW_VERSION, paginate(sortRows(rows, q.sortBy ?? 'createdAt', q.sortOrder ?? 'desc'), q.page, q.pageSize))
       }),
-    all: () => delay(() => stores, 120),
+    options: () => delay(() => storeOptionsView(), 120),
+    all: () => delay(() => storeOptionsView().items, 120),
     get: (id) => delay(() => ({ viewVersion: STORE_VIEW_VERSION, store: storeViewDto(findStore(id)), asOf: asOf() })),
     stats: (id) =>
       delay(() => {

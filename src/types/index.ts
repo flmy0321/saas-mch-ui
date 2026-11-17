@@ -492,6 +492,69 @@ export interface RefundableInfo {
 /** 统计比较值：分母为 0 时为 null，展示为“—” */
 export type CompareValue = number | null
 
+/* ---------- 工作台 / 门店选项视图（HTTP 接入第一阶段） ---------- */
+
+export const DASHBOARD_SUMMARY_VIEW_VERSION = 'merchant-dashboard-summary/1-draft'
+export const RECENT_PAYMENTS_VIEW_VERSION = 'portal-recent-payments-view/0.1-draft'
+export const STORE_OPTIONS_VIEW_VERSION = 'portal-store-options-view/0.1-draft'
+
+/** 报表指标：金额与计数均为十进制字符串，保留后端精度，不转 Number 参与计算 */
+export interface ReportMetrics {
+  successAmount: AmountDecimal
+  successCount: ExactCount
+  refundAmount: AmountDecimal
+  refundCount: ExactCount
+  totalCount: ExactCount
+  terminalCount: ExactCount
+  createdSuccessCount: ExactCount
+}
+
+/** 后端展示字段：派生值只读后端结果，前端不自行计算；null 表示不可比较/不可计算 */
+export type ReportPresentation = Record<string, string | null>
+
+export interface DashboardPeriod {
+  /** 营业日 YYYY-MM-DD */
+  date: string
+  fromInclusive: string
+  toExclusive: string
+  metrics: ReportMetrics
+}
+
+export interface DashboardSummaryView {
+  viewVersion: typeof DASHBOARD_SUMMARY_VIEW_VERSION
+  asOf: string
+  timezone: string
+  /** 历史数据覆盖起点；null 表示后端未声明 */
+  coverageStart: string | null
+  current: DashboardPeriod
+  previous: DashboardPeriod
+  processing: { payingCount: ExactCount; refundProcessingCount: ExactCount; totalCount: ExactCount }
+  presentation: ReportPresentation
+}
+
+export interface RecentPaymentsView {
+  viewVersion: typeof RECENT_PAYMENTS_VIEW_VERSION
+  items: PaymentListItem[]
+  asOf: string
+}
+
+export interface StoreOption {
+  id: string
+  storeNo: string
+  merchantStoreNo: string | null
+  name: string
+  status: StoreViewStatus
+}
+
+export interface StoreOptionsView {
+  viewVersion: typeof STORE_OPTIONS_VIEW_VERSION
+  items: StoreOption[]
+  total: ExactCount
+  /** false 表示只返回了部分门店，筛选器需提示不完整 */
+  complete: boolean
+  asOf: string
+}
+
 export interface DashboardSummary {
   asOf: string
   todaySuccessAmount: AmountDecimal

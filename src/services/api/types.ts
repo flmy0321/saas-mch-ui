@@ -8,7 +8,10 @@ import type {
   CreateRefundInput,
   CreatedApiKey,
   CurrentUser,
-  DashboardSummary,
+  DashboardSummaryView,
+  RecentPaymentsView,
+  StoreOption,
+  StoreOptionsView,
   GlobalSearchResult,
   LoginInput,
   LoginResult,
@@ -27,7 +30,6 @@ import type {
   Notification,
   Paginated,
   PaymentListPage,
-  Payment,
   PaymentQuery,
   RefundQuery,
   RefundableInfo,
@@ -62,10 +64,10 @@ export interface MerchantApi {
     logout(accessToken: string): Promise<void>
   }
   dashboard: {
-    summary(): Promise<DashboardSummary>
+    summary(): Promise<DashboardSummaryView>
     trend(days: number): Promise<TrendReport>
     channelShare(days: number): Promise<ChannelShareReport>
-    recentPayments(limit: number): Promise<Payment[]>
+    recentPayments(limit: number): Promise<RecentPaymentsView>
   }
   payments: {
     /** 精简列表视图（协议 4.1a），不复用详情 Payment */
@@ -88,7 +90,10 @@ export interface MerchantApi {
   }
   stores: {
     list(query: StoreQuery): Promise<StoreViewPage>
-    all(): Promise<Store[]>
+    /** 门店选项视图原文（含 complete 标识） */
+    options(): Promise<StoreOptionsView>
+    /** 解包 options().items，供登录后加载与各页门店筛选使用 */
+    all(): Promise<StoreOption[]>
     get(id: string): Promise<StoreViewSingle>
     stats(id: string): Promise<StoreStats>
     create(input: StoreInput): Promise<Store>

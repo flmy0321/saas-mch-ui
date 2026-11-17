@@ -5,7 +5,10 @@ import type {
   AppViewSingle,
   AuthTokens,
   Captcha,
+  DashboardSummaryView,
   LoginResult,
+  RecentPaymentsView,
+  StoreOptionsView,
   MerchantProfileView,
   MerchantSelection,
   PaymentDetailView,
@@ -18,7 +21,10 @@ import type {
 } from '@/types'
 import {
   APP_VIEW_VERSION,
+  DASHBOARD_SUMMARY_VIEW_VERSION,
   MERCHANT_PROFILE_VIEW_VERSION,
+  RECENT_PAYMENTS_VIEW_VERSION,
+  STORE_OPTIONS_VIEW_VERSION,
   PAYMENT_DETAIL_VIEW_VERSION,
   PAYMENT_LIST_VIEW_VERSION,
   REFUND_VIEW_VERSION,
@@ -216,6 +222,96 @@ function parseRefundExact(v: unknown, paymentId: string, merchantRefundNo: strin
   return r
 }
 
+/* ---------- 第一阶段：工作台摘要 / 近期订单 / 门店选项 ---------- */
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/
+const isYmd = (v: unknown): v is string => typeof v === 'string' && YMD.test(v) && !Number.isNaN(new Date(`${v}T00:00:00Z`).getTime())
+/** 时刻：ISO 8601，带 Z 或显式偏移（报表窗口可能按商户时区表达） */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/
+const isInstant = (v: unknown): v is string => typeof v === 'string' && ISO_INSTANT.test(v) && !Number.isNaN(new Date(v).getTime())
+
+const METRIC_RULES: ItemRules = {
+  successAmount: isAmount,
+  successCount: isExactCount,
+  refundAmount: isAmount,
+  refundCount: isExactCount,
+  totalCount: isExactCount,
+  terminalCount: isExactCount,
+  createdSuccessCount: isExactCount,
+}
+export function checkMetrics(v: unknown, what: string): void {
+  checkItem(v, METRIC_RULES, what)
+}
+
+/** presentation：只接受字符串或 null 值；派生值以后端为准，前端不重算 */
+export function checkPresentation(v: unknown, what: string): void {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw malformed(what)
+  for (const val of Object.values(v)) if (!(val === null || typeof val === 'string')) throw malformed(what)
+}
+
+function checkPeriod(v: unknown, what: string): void {
+  if (!hasExactKeys(v, ['date', 'fromInclusive', 'toExclusive', 'metrics'])) throw malformed(what)
+  if (!isYmd(v.date) || !isInstant(v.fromInclusive) || !isInstant(v.toExclusive)) throw malformed(what)
+  if (new Date(v.fromInclusive).getTime() >= new Date(v.toExclusive).getTime()) throw malformed(what)
+  checkMetrics(v.metrics, what)
+}
+
+export function parseDashboardSummary(v: unknown): DashboardSummaryView {
+  const what = '工作台摘要'
+  if (
+    !hasExactKeys(v, ['viewVersion', 'asOf', 'timezone', 'coverageStart', 'current', 'previous', 'processing', 'presentation']) ||
+    v.viewVersion !== DASHBOARD_SUMMARY_VIEW_VERSION ||
+    !isInstant(v.asOf) ||
+    !isNonEmptyString(v.timezone) ||
+    !(v.coverageStart === null || isYmd(v.coverageStart) || isInstant(v.coverageStart))
+  ) {
+    throw malformed(what)
+  }
+  checkPeriod(v.current, what)
+  checkPeriod(v.previous, what)
+  checkItem(v.processing, { payingCount: isExactCount, refundProcessingCount: isExactCount, totalCount: isExactCount }, what)
+  checkPresentation(v.presentation, what)
+  return v as unknown as DashboardSummaryView
+}
+
+export function parseRecentPayments(v: unknown, limit: number): RecentPaymentsView {
+  const what = '近期订单'
+  if (
+    !hasExactKeys(v, ['viewVersion', 'items', 'asOf']) ||
+    v.viewVersion !== RECENT_PAYMENTS_VIEW_VERSION ||
+    !isInstant(v.asOf) ||
+    !Array.isArray(v.items) ||
+    v.items.length > limit
+  ) {
+    throw malformed(what)
+  }
+  for (const item of v.items) checkPaymentItem(item, '近期订单项')
+  return v as unknown as RecentPaymentsView
+}
+
+const STORE_OPTION_RULES: ItemRules = {
+  id: isNonEmptyString, storeNo: isNonEmptyString, merchantStoreNo: isStrOrNull, name: isStr, status: isNonEmptyString,
+}
+export function parseStoreOptions(v: unknown): StoreOptionsView {
+  const what = '门店选项'
+  if (
+    !hasExactKeys(v, ['viewVersion', 'items', 'total', 'complete', 'asOf']) ||
+    v.viewVersion !== STORE_OPTIONS_VIEW_VERSION ||
+    !isExactCount(v.total) ||
+    typeof v.complete !== 'boolean' ||
+    !isInstant(v.asOf) ||
+    !Array.isArray(v.items)
+  ) {
+    throw malformed(what)
+  }
+  const total = BigInt(v.total)
+  const count = BigInt(v.items.length)
+  // complete=true 时 items 必须是全集；否则 items 不得多于 total
+  if (v.complete ? count !== total : count > total) throw malformed(what)
+  for (const item of v.items) checkItem(item, STORE_OPTION_RULES, '门店选项项')
+  return v as unknown as StoreOptionsView
+}
+
 /**
  * 真实 HTTP 实现（/api/portal/v1，identity-http v0.2 + 网页接口 v1.4 草案）。
  * captcha → login → select-merchant 由同一浏览器同源发出，服务端以 HttpOnly 匿名挑战 Cookie 绑定；
@@ -245,10 +341,15 @@ export const httpApi: MerchantApi = {
     },
   },
   dashboard: {
-    summary: () => request('/dashboard/summary'),
+    summary: async () =>
+      parseDashboardSummary(await request<unknown>('/dashboard/summary', { query: { viewVersion: DASHBOARD_SUMMARY_VIEW_VERSION } })),
     trend: (days) => request('/dashboard/trend', { query: { days } }),
     channelShare: (days) => request('/dashboard/channel-share', { query: { days } }),
-    recentPayments: (limit) => request('/dashboard/recent-payments', { query: { limit } }),
+    recentPayments: async (limit) =>
+      parseRecentPayments(
+        await request<unknown>('/dashboard/recent-payments', { query: { limit, viewVersion: RECENT_PAYMENTS_VIEW_VERSION } }),
+        limit,
+      ),
   },
   payments: {
     list: async (query) => parsePaymentListPage(await request<unknown>('/payments', { query: { ...query } })),
@@ -278,7 +379,8 @@ export const httpApi: MerchantApi = {
   },
   stores: {
     list: async (query) => parsePage<StoreViewPage>(await request<unknown>('/stores', { query: { ...query } }), STORE_VIEW_VERSION, checkStore, '门店列表'),
-    all: () => request('/stores/options'),
+    options: async () => parseStoreOptions(await request<unknown>('/stores/options', { query: { viewVersion: STORE_OPTIONS_VIEW_VERSION } })),
+    all: async () => (await httpApi.stores.options()).items,
     get: async (id) => parseSingle<StoreViewSingle>(await request<unknown>(`/stores/${seg(id)}`), STORE_VIEW_VERSION, 'store', checkStore, '门店详情'),
     stats: (id) => request(`/stores/${seg(id)}/stats`),
     create: (input) => request('/stores', { method: 'POST', body: input }),

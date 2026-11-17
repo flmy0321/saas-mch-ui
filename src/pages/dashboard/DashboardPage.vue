@@ -18,9 +18,11 @@ import { buildPaymentColumns } from '@/pages/payments/paymentColumns'
 import { useSessionStore } from '@/stores/session'
 import { api } from '@/services/api'
 import { channelMeta } from '@/utils/dictionaries'
-import { formatMoney, formatNumber, formatPercent, toDateInput } from '@/utils/format'
+import { formatDateTime, formatMoney, formatNumber, formatPercent, toDateInput } from '@/utils/format'
+import { formatCount } from '@/utils/count'
+import { compareRatio, readPercent, type CompareMetric } from '@/utils/report'
 import { fenToAmount, toFen } from '@/utils/money'
-import type { ChannelShare, Payment } from '@/types'
+import type { ChannelShare, PaymentListItem } from '@/types'
 
 const router = useRouter()
 const { user } = storeToRefs(useSessionStore())
@@ -57,7 +59,7 @@ const greeting = computed(() => {
 })
 
 const today = toDateInput(new Date())
-const columns = buildPaymentColumns<Payment>({ include: ['id', 'storeName', 'amount', 'channel', 'status', 'createdAt'] })
+const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'storeName', 'amount', 'channel', 'status', 'createdAt'] })
 
 function reloadAll() {
   summary.reload()
@@ -67,9 +69,21 @@ function reloadAll() {
 }
 
 const s = computed(() => summary.data.value)
+/** 比较值只读后端 presentation；缺失或 null 时 MetricCard 显示“—”，表示不可比较 */
+const cmp = (m: CompareMetric) => (s.value ? compareRatio(s.value.presentation, m) : undefined)
+const successRate = computed(() => (s.value ? readPercent(s.value.presentation, 'successRatePercent') : null))
+const avgHint = computed(() => {
+  const avg = s.value?.presentation.averageAmount
+  return typeof avg === 'string' ? `笔均 ${formatMoney(avg)}` : undefined
+})
+/** coverageStart 晚于当前营业日：历史数据未覆盖，零值不代表真实无交易 */
+const coverageNote = computed(() => {
+  const v = s.value
+  if (!v?.coverageStart) return ''
+  return v.coverageStart.slice(0, 10) > v.previous.date ? '昨日数据未纳入统计覆盖范围，对比不可用' : ''
+})
 const dayOptions = [
   { value: 7, label: '近 7 天' },
-  { value: 14, label: '近 14 天' },
   { value: 30, label: '近 30 天' },
 ]
 </script>
@@ -86,56 +100,63 @@ const dayOptions = [
     </PageHeader>
 
     <ErrorState v-if="summary.error.value" :message="summary.error.value" @retry="summary.reload()" />
-    <section v-else aria-label="今日核心指标" class="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-      <MetricCard
-        class="col-span-2 lg:col-span-1 xl:col-span-2"
-        label="今日成功交易金额"
-        :icon="Wallet"
-        :loading="summary.loading.value && !s"
-        :value="s ? formatMoney(s.todaySuccessAmount) : undefined"
-        :delta="s?.compare.successAmount"
-        delta-label="较昨日"
-        interactive
-        @select="router.push({ path: '/payments', query: { status: 'SUCCESS', paidFrom: today, paidTo: today } })"
-      />
-      <MetricCard
-        label="今日成功笔数"
-        :icon="Receipt"
-        :loading="summary.loading.value && !s"
-        :value="s ? formatNumber(s.todaySuccessCount) : undefined"
-        :delta="s?.compare.successCount"
-        delta-label="较昨日"
-      />
-      <MetricCard
-        label="支付成功率"
-        :icon="CircleCheck"
-        :loading="summary.loading.value && !s"
-        :value="s ? formatPercent(s.todaySuccessRate) : undefined"
-        :delta="s?.compare.successRate"
-        delta-label="较昨日"
-        hint="成功笔数 / 已提交支付笔数"
-      />
-      <MetricCard
-        label="今日退款金额"
-        :icon="Undo2"
-        :loading="summary.loading.value && !s"
-        :value="s ? formatMoney(s.todayRefundAmount) : undefined"
-        :delta="s?.compare.refundAmount"
-        delta-label="较昨日"
-        invert-delta
-        interactive
-        @select="router.push({ path: '/refunds', query: { createdFrom: today, createdTo: today } })"
-      />
-      <MetricCard
-        label="处理中订单"
-        :icon="Clock"
-        :loading="summary.loading.value && !s"
-        :value="s ? formatNumber(s.processingCount) : undefined"
-        hint="支付中 / 关闭中"
-        interactive
-        @select="router.push({ path: '/payments', query: { status: 'PAYING' } })"
-      />
-    </section>
+    <template v-else>
+      <p v-if="s" class="-mt-3 text-xs text-muted-foreground">
+        营业日 {{ s.current.date }}（{{ s.timezone }}）· 数据截至 {{ formatDateTime(s.asOf) }}
+        <span v-if="coverageNote" class="ml-2 text-warning">{{ coverageNote }}</span>
+      </p>
+      <section aria-label="今日核心指标" class="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+        <MetricCard
+          class="col-span-2 lg:col-span-1 xl:col-span-2"
+          label="今日成功交易金额"
+          :icon="Wallet"
+          :loading="summary.loading.value && !s"
+          :value="s ? formatMoney(s.current.metrics.successAmount) : undefined"
+          :delta="cmp('successAmount')"
+          delta-label="较昨日"
+          interactive
+          @select="router.push({ path: '/payments', query: { status: 'SUCCESS', paidFrom: s?.current.date ?? today, paidTo: s?.current.date ?? today } })"
+        />
+        <MetricCard
+          label="今日成功笔数"
+          :icon="Receipt"
+          :loading="summary.loading.value && !s"
+          :value="s ? formatCount(s.current.metrics.successCount) : undefined"
+          :delta="cmp('successCount')"
+          delta-label="较昨日"
+          :hint="avgHint"
+        />
+        <MetricCard
+          label="支付成功率"
+          :icon="CircleCheck"
+          :loading="summary.loading.value && !s"
+          :value="s ? (successRate === null ? '不可计算' : `${successRate}%`) : undefined"
+          :delta="cmp('successRate')"
+          delta-label="较昨日"
+          hint="成功笔数 / 已终态笔数（后端口径）"
+        />
+        <MetricCard
+          label="今日退款金额"
+          :icon="Undo2"
+          :loading="summary.loading.value && !s"
+          :value="s ? formatMoney(s.current.metrics.refundAmount) : undefined"
+          :delta="cmp('refundAmount')"
+          delta-label="较昨日"
+          invert-delta
+          interactive
+          @select="router.push({ path: '/refunds', query: { createdFrom: s?.current.date ?? today, createdTo: s?.current.date ?? today } })"
+        />
+        <MetricCard
+          label="处理中"
+          :icon="Clock"
+          :loading="summary.loading.value && !s"
+          :value="s ? formatCount(s.processing.totalCount) : undefined"
+          :hint="s ? `支付中 ${formatCount(s.processing.payingCount)} · 退款处理中 ${formatCount(s.processing.refundProcessingCount)}` : undefined"
+          interactive
+          @select="router.push({ path: '/payments', query: { status: 'PAYING' } })"
+        />
+      </section>
+    </template>
 
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h2 class="text-sm font-semibold">交易趋势</h2>
@@ -233,14 +254,14 @@ const dayOptions = [
       </template>
       <DataTable
         :columns="columns"
-        :data="recent.data.value ?? []"
+        :data="recent.data.value?.items ?? []"
         :loading="recent.loading.value"
         :error="recent.error.value"
         :skeleton-rows="6"
-        :row-key="(r: Payment) => r.id"
+        :row-key="(r: PaymentListItem) => r.id"
         clickable
-        empty-title="今日暂无交易"
-        @row-click="(r: Payment) => router.push(`/payments/${r.id}`)"
+        empty-title="暂无交易"
+        @row-click="(r: PaymentListItem) => router.push(`/payments/${r.id}`)"
         @retry="recent.reload()"
       />
     </Card>
