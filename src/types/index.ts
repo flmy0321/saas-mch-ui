@@ -652,10 +652,32 @@ export interface StoreStats {
   trend: TrendPoint[]
 }
 
-export interface GlobalSearchResult {
-  type: 'payment' | 'refund' | 'store'
+export const GLOBAL_SEARCH_VIEW_VERSION = 'portal-global-search-view/0.1-draft'
+
+export const SEARCH_GROUP_TYPES = ['payment', 'refund', 'store'] as const
+export type SearchGroupType = (typeof SEARCH_GROUP_TYPES)[number]
+
+/** OK：已检索；NOT_AUTHORIZED：无权限；NOT_APPLICABLE：关键词不适用于该类型 */
+export const SEARCH_GROUP_STATES = ['OK', 'NOT_AUTHORIZED', 'NOT_APPLICABLE'] as const
+export type SearchGroupState = (typeof SEARCH_GROUP_STATES)[number]
+
+export interface GlobalSearchItem {
+  type: SearchGroupType
   id: string
   title: string
-  subtitle: string
+  /** 站内路径，必须以单个 / 开头 */
   to: string
+}
+
+export interface GlobalSearchGroup {
+  type: SearchGroupType
+  state: SearchGroupState
+  items: GlobalSearchItem[]
+  hasMore: boolean
+  asOf: string
+}
+
+export interface GlobalSearchView {
+  viewVersion: typeof GLOBAL_SEARCH_VIEW_VERSION
+  groups: GlobalSearchGroup[]
 }

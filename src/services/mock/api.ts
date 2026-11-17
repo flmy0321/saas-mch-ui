@@ -30,7 +30,15 @@ import {
   type StoreView,
 } from '@/types'
 import { ApiError, type ApiErrorInit, type MerchantApi } from '@/services/api/types'
-import type { ReportPresentation } from '@/types'
+import {
+  GLOBAL_SEARCH_VIEW_VERSION,
+  type GlobalSearchGroup,
+  type GlobalSearchItem,
+  type GlobalSearchView,
+  type ReportPresentation,
+  type SearchGroupState,
+  type SearchGroupType,
+} from '@/types'
 import {
   COMPLETED_REPORT_VIEW_VERSION,
   DIRECTORY_MODE_OBSERVED_ONLY,
@@ -866,35 +874,49 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
   },
 
   search: (keyword) =>
-    delay(() => {
+    delay((): GlobalSearchView => {
       const kw = keyword.trim()
-      if (kw.length < 2) return []
-      return [
-        ...payments
-          .filter((p) => p.id.includes(kw) || (p.merchantOrderNo ?? '').includes(kw))
-          .slice(0, 5)
-          .map((p) => ({
-            type: 'payment' as const,
-            id: p.id,
-            title: p.id,
-            subtitle: [p.merchantOrderNo ?? '无商户订单号', p.storeName ?? '无门店'].join(' · '),
-            to: `/payments/${p.id}`,
-          })),
-        ...refunds
-          .filter((r) => r.id.includes(kw) || r.merchantRefundNo.includes(kw))
-          .slice(0, 3)
-          .map((r) => ({
-            type: 'refund' as const,
-            id: r.id,
-            title: r.id,
-            subtitle: `${r.merchantRefundNo} · 原订单 ${r.paymentId}`,
-            to: `/refunds/${r.id}`,
-          })),
-        ...stores
-          .filter((s) => s.name.includes(kw) || s.storeNo.includes(kw) || s.merchantStoreNo.includes(kw))
-          .slice(0, 3)
-          .map((s) => ({ type: 'store' as const, id: s.id, title: s.name, subtitle: s.storeNo, to: `/stores/${s.id}` })),
-      ]
+      const at = asOf()
+      const LIMIT = 5
+      const empty = (type: SearchGroupType, state: SearchGroupState): GlobalSearchGroup => ({ type, state, items: [], hasMore: false, asOf: at })
+      const ok = (type: SearchGroupType, all: GlobalSearchItem[]): GlobalSearchGroup => ({
+        type,
+        state: 'OK',
+        items: all.slice(0, LIMIT),
+        hasMore: all.length > LIMIT,
+        asOf: at,
+      })
+      /** 订单号/退款号类关键词：2-64 位字母数字、下划线或连字符 */
+      const idLike = /^[A-Za-z0-9_-]{2,64}$/.test(kw)
+      /** Mock 约定：以 deny 开头的关键词模拟无退款查看权限 */
+      const refundDenied = kw.toLowerCase().startsWith('deny')
+      const payment = idLike
+        ? ok(
+            'payment',
+            payments
+              .filter((p) => p.id.includes(kw) || (p.merchantOrderNo ?? '').includes(kw))
+              .map((p) => ({ type: 'payment', id: p.id, title: p.merchantOrderNo ? `${p.id} · ${p.merchantOrderNo}` : p.id, to: `/payments/${p.id}` })),
+          )
+        : empty('payment', 'NOT_APPLICABLE')
+      const refund = refundDenied
+        ? empty('refund', 'NOT_AUTHORIZED')
+        : idLike
+          ? ok(
+              'refund',
+              refunds
+                .filter((r) => r.id.includes(kw) || r.merchantRefundNo.includes(kw))
+                .map((r) => ({ type: 'refund', id: r.id, title: `${r.id} · ${r.merchantRefundNo}`, to: `/refunds/${r.id}` })),
+            )
+          : empty('refund', 'NOT_APPLICABLE')
+      const store = kw
+        ? ok(
+            'store',
+            stores
+              .filter((s) => s.name.includes(kw) || s.storeNo.includes(kw) || (s.merchantStoreNo ?? '').includes(kw))
+              .map((s) => ({ type: 'store', id: s.storeNo, title: `${s.name} · ${s.storeNo}`, to: `/stores/${s.id}` })),
+          )
+        : empty('store', 'NOT_APPLICABLE')
+      return { viewVersion: GLOBAL_SEARCH_VIEW_VERSION, groups: [payment, refund, store] }
     }, 180),
 }
 

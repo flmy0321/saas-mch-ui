@@ -1,3 +1,4 @@
+import { GLOBAL_SEARCH_VIEW_VERSION, SEARCH_GROUP_STATES, SEARCH_GROUP_TYPES, type GlobalSearchView } from '@/types'
 import type { MerchantApi } from '@/services/api/types'
 import { ApiError } from '@/services/api/types'
 import type {
@@ -386,6 +387,34 @@ function checkAnalyticsPeriod(p: unknown, what: string): void {
   checkMetrics(p.metrics, what)
 }
 
+/** 只接受站内路径，拒绝协议相对地址和反斜杠，防止开放跳转 */
+const isInternalPath = (v: unknown): v is string =>
+  typeof v === 'string' && v.startsWith('/') && !v.startsWith('//') && !v.includes('\\') && !/[\s]/.test(v)
+
+const SEARCH_MAX_ITEMS = 50
+
+export function parseGlobalSearch(v: unknown): GlobalSearchView {
+  const what = '全局搜索'
+  if (!hasExactKeys(v, ['viewVersion', 'groups']) || v.viewVersion !== GLOBAL_SEARCH_VIEW_VERSION || !Array.isArray(v.groups)) {
+    throw malformed(what)
+  }
+  if (v.groups.length > SEARCH_GROUP_TYPES.length) throw malformed(what)
+  const seen = new Set<unknown>()
+  for (const g of v.groups) {
+    if (!hasExactKeys(g, ['type', 'state', 'items', 'hasMore', 'asOf'])) throw malformed(what)
+    if (!oneOf(...SEARCH_GROUP_TYPES)(g.type) || seen.has(g.type)) throw malformed(what)
+    seen.add(g.type)
+    if (!oneOf(...SEARCH_GROUP_STATES)(g.state) || typeof g.hasMore !== 'boolean' || !isInstant(g.asOf)) throw malformed(what)
+    if (!Array.isArray(g.items) || g.items.length > SEARCH_MAX_ITEMS) throw malformed(what)
+    if (g.state !== 'OK' && (g.items.length > 0 || g.hasMore)) throw malformed(what)
+    const groupType = g.type
+    for (const it of g.items) {
+      checkItem(it, { type: (t: unknown) => t === groupType, id: isNonEmptyString, title: isNonEmptyString, to: isInternalPath }, what)
+    }
+  }
+  return v as unknown as GlobalSearchView
+}
+
 const ANALYTICS_MAX_BUCKETS = 400
 const STORE_AMOUNT_RULES: ItemRules = { storeCode: isStrOrNull, amount: isAmount, count: isExactCount }
 
@@ -552,5 +581,6 @@ export const httpApi: MerchantApi = {
       await request<void>('/account/notifications/read-all', { method: 'POST' })
     },
   },
-  search: (keyword) => request('/search', { query: { keyword } }),
+  search: async (keyword) =>
+    parseGlobalSearch(await request<unknown>('/search', { query: { keyword, viewVersion: GLOBAL_SEARCH_VIEW_VERSION } })),
 }

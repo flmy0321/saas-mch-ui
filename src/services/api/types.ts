@@ -15,7 +15,7 @@ import type {
   RecentPaymentsView,
   StoreOption,
   StoreOptionsView,
-  GlobalSearchResult,
+  GlobalSearchView,
   LoginInput,
   LoginResult,
   LoginSession,
@@ -130,7 +130,7 @@ export interface MerchantApi {
     notifications(): Promise<Notification[]>
     markAllRead(): Promise<void>
   }
-  search(keyword: string): Promise<GlobalSearchResult[]>
+  search(keyword: string): Promise<GlobalSearchView>
 }
 
 /** 资金写错误响应中的结果确定性（协议 1.3） */
