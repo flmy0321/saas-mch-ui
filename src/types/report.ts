@@ -72,6 +72,7 @@ export interface StoreAmountItem {
 export const DIRECTORY_MODE_OBSERVED_ONLY = 'OBSERVED_ONLY'
 
 export interface AnalyticsView extends CompletedReportBase {
+  granularity: 'day' | 'week' | 'month'
   current: AnalyticsPeriodView
   previous: AnalyticsPeriodView
   presentation: ReportPresentation

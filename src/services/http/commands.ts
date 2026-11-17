@@ -40,10 +40,13 @@ function sameCommand(o: Obj, commandId: string, what: string) {
   if (o.commandId !== commandId) invalid(what, 'commandId 与提交的命令号不一致')
 }
 
-function pendingOr<T>(o: Obj, what: string, applied: () => T): CommandReply<T> {
-  if (o.status === 'APPLIED') return { status: 'APPLIED', result: applied() }
-  if (o.status === 'UNKNOWN' || o.status === 'NOT_OBSERVED') return { status: o.status }
-  return invalid(what, `未知的命令状态 ${String(o.status)}`)
+/** Portal 线上回执字段为 outcome；前端内部统一映射为 CommandReply.status。所有状态都核对原 commandId。 */
+function pendingOr<T>(o: Obj, commandId: string, what: string, applied: () => T): CommandReply<T> {
+  if (o.outcome === undefined) invalid(what, 'outcome 缺失')
+  sameCommand(o, commandId, what)
+  if (o.outcome === 'APPLIED') return { status: 'APPLIED', result: applied() }
+  if (o.outcome === 'UNKNOWN' || o.outcome === 'NOT_OBSERVED') return { status: o.outcome }
+  return invalid(what, `未知的命令结果 ${String(o.outcome)}`)
 }
 
 const STORE_STATUSES = ['ACTIVE', 'DISABLED'] as const
@@ -75,8 +78,7 @@ export function parseStoreEdit(raw: unknown, storeCode: string): StoreEditView {
 export function parseStoreCommand(raw: unknown, commandId: string): CommandReply<StoreCommandApplied> {
   const what = '门店命令'
   const o = root(raw, STORE_COMMAND_VIEW_VERSION, what)
-  return pendingOr(o, what, () => {
-    sameCommand(o, commandId, what)
+  return pendingOr(o, commandId, what, () => {
     return { commandId, configurationVersion: version(o, what), store: checkStore(o.store, what) }
   })
 }
@@ -102,8 +104,7 @@ function checkKey(v: unknown, appId: string, what: string): ApiKey {
 export function parseKeyCommand(raw: unknown, commandId: string, appId: string): CommandReply<KeyCommandApplied> {
   const what = 'API Key 命令'
   const o = root(raw, KEY_COMMAND_VIEW_VERSION, what)
-  return pendingOr(o, what, () => {
-    sameCommand(o, commandId, what)
+  return pendingOr(o, commandId, what, () => {
     if (o.secret !== undefined && !isStr(o.secret)) invalid(what, 'secret 不合法')
     return {
       commandId,
@@ -130,8 +131,7 @@ export function parseWebhookEdit(raw: unknown, appId: string): WebhookEditView {
 export function parseWebhookCommand(raw: unknown, commandId: string): CommandReply<WebhookCommandApplied> {
   const what = 'Webhook 保存'
   const o = root(raw, WEBHOOK_COMMAND_VIEW_VERSION, what)
-  return pendingOr(o, what, () => {
-    sameCommand(o, commandId, what)
+  return pendingOr(o, commandId, what, () => {
     return { commandId, configurationVersion: version(o, what) }
   })
 }
@@ -139,14 +139,16 @@ export function parseWebhookCommand(raw: unknown, commandId: string): CommandRep
 export function parseWebhookTest(raw: unknown, commandId: string): CommandReply<WebhookTestResult> {
   const what = 'Webhook 测试'
   const o = root(raw, WEBHOOK_COMMAND_VIEW_VERSION, what)
-  if (o.status === 'UNKNOWN' || o.status === 'NOT_OBSERVED') return { status: o.status }
-  if (o.status !== 'COMPLETED' && o.status !== 'NOT_SENT') invalid(what, `未知的测试状态 ${String(o.status)}`)
+  const outcome = o.outcome
+  if (outcome === undefined) invalid(what, 'outcome 缺失')
   sameCommand(o, commandId, what)
+  if (outcome === 'UNKNOWN' || outcome === 'NOT_OBSERVED') return { status: outcome }
+  if (outcome !== 'COMPLETED' && outcome !== 'NOT_SENT') invalid(what, `未知的测试结果 ${String(outcome)}`)
   const http = o.httpStatus
   const ms = o.durationMs
   if (typeof http !== 'number' || !Number.isInteger(http) || http < 0 || http > 599) invalid(what, 'httpStatus 不合法')
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) invalid(what, 'durationMs 不合法')
-  if (o.status === 'NOT_SENT' && http !== 0) invalid(what, 'NOT_SENT 的 httpStatus 必须为 0')
-  if (o.status === 'COMPLETED' && (http < 100 || http > 599)) invalid(what, 'COMPLETED 必须带有效 HTTP 状态')
-  return { status: 'APPLIED', result: { status: o.status, httpStatus: http, durationMs: ms } }
+  if (outcome === 'NOT_SENT' && http !== 0) invalid(what, 'NOT_SENT 的 httpStatus 必须为 0')
+  if (outcome === 'COMPLETED' && (http < 100 || http > 599)) invalid(what, 'COMPLETED 必须带有效 HTTP 状态')
+  return { status: 'APPLIED', result: { status: outcome, httpStatus: http, durationMs: ms } }
 }

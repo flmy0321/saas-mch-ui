@@ -799,8 +799,9 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
     query: (q) =>
       delay((): AnalyticsView => {
         const from = dayStartMs(q.from)
-        const toDay = Math.min(dayStartMs(q.to), lastCompletedDay())
-        if (from > toDay) fail('所选营业日尚未结束，暂无已完成数据', 'REPORTING_DAY_INCOMPLETE', 409)
+        if (dayStartMs(q.to) > lastCompletedDay()) fail('所选营业日尚未结束，暂无已完成数据', 'REPORTING_DAY_INCOMPLETE', 422)
+        const toDay = dayStartMs(q.to)
+        if (from > toDay) fail('开始日期不能晚于结束日期', 'INVALID_REQUEST', 400)
         const to = toDay + DAY - 1
         const f = { storeId: q.storeId, channel: q.channel }
         const starts = bucketStarts(from, to, q.granularity)
@@ -823,6 +824,7 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
           .map(({ s, a }) => ({ storeCode: s.id, amount: fenToAmount(a.successAmount), count: String(a.successCount) }))
         return {
           ...completedBase(from, toDay),
+          granularity: q.granularity,
           current: { fromDate: ymd(from), toDate: ymd(toDay), metrics: reportMetrics(cur) },
           previous: { fromDate: ymd(from - len), toDate: ymd(from - DAY), metrics: reportMetrics(prev) },
           presentation: presentationOf(cur, prev),
@@ -1090,7 +1092,13 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
       const kw = keyword.trim()
       const at = asOf()
       const LIMIT = 5
-      const empty = (type: SearchGroupType, state: SearchGroupState): GlobalSearchGroup => ({ type, state, items: [], hasMore: false, asOf: at })
+      const empty = (type: SearchGroupType, state: Exclude<SearchGroupState, 'OK'>): GlobalSearchGroup => ({
+        type,
+        state,
+        items: [],
+        hasMore: null,
+        asOf: null,
+      })
       const ok = (type: SearchGroupType, all: GlobalSearchItem[]): GlobalSearchGroup => ({
         type,
         state: 'OK',

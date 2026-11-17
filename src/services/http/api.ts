@@ -520,9 +520,13 @@ export function parseGlobalSearch(v: unknown): GlobalSearchView {
     if (!hasExactKeys(g, ['type', 'state', 'items', 'hasMore', 'asOf'])) throw malformed(what)
     if (!oneOf(...SEARCH_GROUP_TYPES)(g.type) || seen.has(g.type)) throw malformed(what)
     seen.add(g.type)
-    if (!oneOf(...SEARCH_GROUP_STATES)(g.state) || typeof g.hasMore !== 'boolean' || !isInstant(g.asOf)) throw malformed(what)
+    if (!oneOf(...SEARCH_GROUP_STATES)(g.state)) throw malformed(what)
     if (!Array.isArray(g.items) || g.items.length > SEARCH_MAX_ITEMS) throw malformed(what)
-    if (g.state !== 'OK' && (g.items.length > 0 || g.hasMore)) throw malformed(what)
+    if (g.state === 'OK') {
+      if (typeof g.hasMore !== 'boolean' || !isInstant(g.asOf)) throw malformed(what)
+    } else if (g.items.length > 0 || g.hasMore !== null || g.asOf !== null) {
+      throw malformed(what)
+    }
     const groupType = g.type
     for (const it of g.items) {
       checkItem(it, { type: (t: unknown) => t === groupType, id: isNonEmptyString, title: isNonEmptyString, to: isInternalPath }, what)
@@ -536,7 +540,8 @@ const STORE_AMOUNT_RULES: ItemRules = { storeCode: isStrOrNull, amount: isAmount
 
 export function parseAnalytics(v: unknown): AnalyticsView {
   const what = '经营分析'
-  checkReportBase(v, ['current', 'previous', 'presentation', 'buckets', 'byChannel', 'byStore', 'directoryMode'], what)
+  checkReportBase(v, ['granularity', 'current', 'previous', 'presentation', 'buckets', 'byChannel', 'byStore', 'directoryMode'], what)
+  if (!oneOf('day', 'week', 'month')(v.granularity)) throw malformed(what)
   checkAnalyticsPeriod(v.current, what)
   checkAnalyticsPeriod(v.previous, what)
   checkPresentation(v.presentation, what)

@@ -17,19 +17,22 @@ import { useQueryFilters } from '@/composables/useQueryFilters'
 import { useTradeCharts, type SeriesPoint } from '@/composables/useTradeCharts'
 import { api } from '@/services/api'
 import { CHANNEL, toOptions } from '@/utils/dictionaries'
-import { formatMoney, toDateInput } from '@/utils/format'
+import { formatMoney } from '@/utils/format'
 import { formatCount } from '@/utils/count'
 import { toFen } from '@/utils/money'
 import { averageAmount, chartPoint, reportErrorText, successRateText } from '@/utils/reporting'
 import { DIRECTORY_MODE_OBSERVED_ONLY } from '@/types'
 import type { AnalyticsBucketView, Granularity, PaymentChannel } from '@/types'
 
-const end = new Date()
-const start = new Date(end.getTime() - 29 * 86400000)
+const DAY_MS = 86_400_000
+/** +08:00 口径的 YYYY-MM-DD；当天未结束会被服务端以 422 REPORTING_DAY_INCOMPLETE 拒绝，默认取最近一个已完成营业日 */
+const shanghaiYmd = (ms: number) => new Date(ms + 8 * 3_600_000).toISOString().slice(0, 10)
+const lastCompletedYmd = shanghaiYmd(Date.now() - DAY_MS)
+const defaultFromYmd = shanghaiYmd(new Date(`${lastCompletedYmd}T12:00:00+08:00`).getTime() - 29 * DAY_MS)
 
 const { applied, draft, apply } = useQueryFilters({
-  from: toDateInput(start),
-  to: toDateInput(end),
+  from: defaultFromYmd,
+  to: lastCompletedYmd,
   granularity: 'day',
   storeId: '',
   channel: '',

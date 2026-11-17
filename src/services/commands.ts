@@ -29,11 +29,14 @@ function readAll(): Record<string, PendingCommand> {
   }
 }
 
-function writeAll(all: Record<string, PendingCommand>) {
+/** 写入并回读校验；失败返回 false */
+function writeAll(all: Record<string, PendingCommand>): boolean {
   try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(all))
+    const raw = JSON.stringify(all)
+    sessionStorage.setItem(STORAGE_KEY, raw)
+    return sessionStorage.getItem(STORAGE_KEY) === raw
   } catch {
-    /* 存储不可用时仅保留内存中的流程，仍不会自动重发 */
+    return false
   }
 }
 
@@ -41,8 +44,14 @@ export function getPendingCommand(scope: string): PendingCommand | null {
   return readAll()[scope] ?? null
 }
 
+/** 首次发送前必须成功落盘；失败时抛出 STORAGE_UNAVAILABLE，调用方不得发送 */
 export function rememberCommand(cmd: PendingCommand) {
-  writeAll({ ...readAll(), [cmd.scope]: cmd })
+  if (!writeAll({ ...readAll(), [cmd.scope]: cmd })) {
+    throw new ApiError(
+      '浏览器无法保存本次操作的命令号（可能处于隐私模式或存储已满），为避免结果无法确认，本次未提交。请调整浏览器设置后重试。',
+      'STORAGE_UNAVAILABLE',
+    )
+  }
 }
 
 export function forgetCommand(scope: string) {
@@ -82,14 +91,26 @@ export interface LookupOptions {
   intervalMs?: number
 }
 
-/** 按原号查询，直到 APPLIED 或次数用尽；查询失败视为仍未知 */
+/** 查询暂时不可用：断线/超时、503、会话失效。原号保留，稍后用同一号码再查 */
+export function isLookupUnavailable(e: unknown): boolean {
+  return (
+    isNoResponse(e) ||
+    (e instanceof ApiError && (e.httpStatus === 503 || e.httpStatus === 401 || e.code === 'UNAUTHENTICATED'))
+  )
+}
+
+/**
+ * 按原号查询，直到 APPLIED 或次数用尽。
+ * 只有确认 APPLIED 才清除待确认记录；NOT_OBSERVED、503、会话失效、断线一律保留原号。
+ * 其他查询错误同样保留记录后抛出，绝不改用新号重提。
+ */
 export async function lookupUntilKnown<T>(
   pending: PendingCommand,
   lookup: (cmd: PendingCommand) => Promise<CommandReply<T>>,
   { attempts = 3, intervalMs = 800 }: LookupOptions = {},
 ): Promise<CommandOutcome<T>> {
   for (let i = 0; i < attempts; i++) {
-    if (i > 0 || intervalMs > 0) await wait(i === 0 ? 0 : intervalMs)
+    if (i > 0) await wait(intervalMs)
     try {
       const reply = await lookup(pending)
       if (reply.status === 'APPLIED') {
@@ -97,10 +118,8 @@ export async function lookupUntilKnown<T>(
         return { state: 'APPLIED', result: reply.result, recovered: true }
       }
     } catch (e) {
-      if (!isNoResponse(e)) {
-        forgetCommand(pending.scope)
-        throw e
-      }
+      if (!isLookupUnavailable(e)) throw e
+      if (e instanceof ApiError && (e.httpStatus === 401 || e.code === 'UNAUTHENTICATED')) break
     }
   }
   return { state: 'PENDING', commandId: pending.commandId }

@@ -684,13 +684,10 @@ export interface GlobalSearchItem {
   to: string
 }
 
-export interface GlobalSearchGroup {
-  type: SearchGroupType
-  state: SearchGroupState
-  items: GlobalSearchItem[]
-  hasMore: boolean
-  asOf: string
-}
+/** OK 分组：hasMore 为布尔、asOf 为时间；跳过的分组：items=[]、hasMore=null、asOf=null */
+export type GlobalSearchGroup =
+  | { type: SearchGroupType; state: 'OK'; items: GlobalSearchItem[]; hasMore: boolean; asOf: string }
+  | { type: SearchGroupType; state: 'NOT_AUTHORIZED' | 'NOT_APPLICABLE'; items: []; hasMore: null; asOf: null }
 
 export interface GlobalSearchView {
   viewVersion: typeof GLOBAL_SEARCH_VIEW_VERSION
