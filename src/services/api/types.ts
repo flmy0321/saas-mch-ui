@@ -1,4 +1,17 @@
 import type {
+  CommandReply,
+  ConfigurationVersion,
+  KeyCommandApplied,
+  KeyCommandOperation,
+  StoreCommandApplied,
+  StoreCommandInput,
+  StoreCommandOperation,
+  StoreEditView,
+  WebhookCommandApplied,
+  WebhookEditView,
+  WebhookTestResult,
+} from '@/types/command'
+import type {
   AnalyticsQuery,
   AnalyticsView,
   ChannelShareView,
@@ -11,7 +24,6 @@ import type {
   AuthTokens,
   Captcha,
   CreateRefundInput,
-  CreatedApiKey,
   CurrentUser,
   DashboardSummaryView,
   RecentPaymentsView,
@@ -38,8 +50,6 @@ import type {
   PaymentQuery,
   RefundQuery,
   RefundableInfo,
-  Store,
-  StoreInput,
   StoreQuery,
   WebhookConfig,
   WebhookConfigView,
@@ -102,8 +112,19 @@ export interface MerchantApi {
     get(id: string): Promise<StoreViewSingle>
     /** storeCode 为核心门店编号（Store.id，与交易 storeId 同值）；窗口为最近 30 个已完成营业日 */
     stats(storeCode: string): Promise<StoreStatsView>
-    create(input: StoreInput): Promise<Store>
-    update(id: string, input: StoreInput): Promise<Store>
+    /** storeCode = Store.id */
+    editView(storeCode: string): Promise<StoreEditView>
+    create(commandId: string, input: StoreCommandInput): Promise<CommandReply<StoreCommandApplied>>
+    update(
+      commandId: string,
+      storeCode: string,
+      expectedConfigurationVersion: ConfigurationVersion,
+      input: StoreCommandInput,
+    ): Promise<CommandReply<StoreCommandApplied>>
+    lookupCommand(
+      commandId: string,
+      q: { operation: StoreCommandOperation; storeCode?: string },
+    ): Promise<CommandReply<StoreCommandApplied>>
   }
   apps: {
     /** 分页视图（协议 3.8.3），不承诺跨页快照一致 */
@@ -112,14 +133,26 @@ export interface MerchantApi {
   }
   keys: {
     list(query: ApiKeyQuery): Promise<DeveloperPage<ApiKey>>
-    create(appId: string): Promise<CreatedApiKey>
-    rotate(keyId: string): Promise<CreatedApiKey>
-    revoke(keyId: string): Promise<ApiKey>
+    create(commandId: string, appId: string): Promise<CommandReply<KeyCommandApplied>>
+    rotate(commandId: string, appId: string, keyId: string): Promise<CommandReply<KeyCommandApplied>>
+    revoke(commandId: string, appId: string, keyId: string): Promise<CommandReply<KeyCommandApplied>>
+    lookupCommand(
+      commandId: string,
+      q: { appId: string; operation: KeyCommandOperation; keyId?: string },
+    ): Promise<CommandReply<KeyCommandApplied>>
   }
   webhooks: {
     getConfig(appId: string): Promise<WebhookConfigView>
-    updateConfig(appId: string, input: Pick<WebhookConfig, 'url' | 'enabled'>): Promise<WebhookConfig>
-    sendTest(appId: string): Promise<{ httpStatus: number; durationMs: number }>
+    editView(appId: string): Promise<WebhookEditView>
+    updateConfig(
+      commandId: string,
+      appId: string,
+      expectedConfigurationVersion: ConfigurationVersion,
+      input: Pick<WebhookConfig, 'url' | 'enabled'>,
+    ): Promise<CommandReply<WebhookCommandApplied>>
+    lookupSave(commandId: string, appId: string): Promise<CommandReply<WebhookCommandApplied>>
+    sendTest(commandId: string, appId: string): Promise<CommandReply<WebhookTestResult>>
+    lookupTest(commandId: string, appId: string): Promise<CommandReply<WebhookTestResult>>
     deliveries(query: WebhookDeliveryQuery): Promise<DeveloperPage<WebhookDelivery>>
     deliveriesFor(resourceId: string, query?: PageQuery): Promise<DeveloperPage<WebhookDelivery>>
   }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import type { ColumnDef } from '@tanstack/vue-table'
 import { toast } from 'vue-sonner'
 import { AlertTriangle, Plus, RefreshCw, ShieldOff } from '@lucide/vue'
@@ -19,7 +19,9 @@ import AppPickerStatus from '@/components/business/AppPickerStatus.vue'
 import { api } from '@/services/api'
 import { API_KEY_STATUS } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
-import type { ApiKey, CreatedApiKey } from '@/types'
+import type { ApiKey } from '@/types'
+import { forgetCommand, getPendingCommand, lookupUntilKnown, runCommand, type PendingCommand } from '@/services/commands'
+import type { CommandOutcome, KeyCommandApplied, KeyCommandOperation } from '@/types/command'
 
 const { apps, options, appId, current } = useAppPicker()
 const keys = useAsync(
@@ -29,7 +31,7 @@ const keys = useAsync(
 const keyItems = computed(() => keys.data.value?.items ?? [])
 
 const creating = ref(false)
-const created = ref<CreatedApiKey | null>(null)
+const created = ref<{ key: ApiKey; secret: string } | null>(null)
 const createdMode = ref<'create' | 'rotate'>('create')
 const savedAck = ref(false)
 
@@ -44,18 +46,67 @@ const confirming = ref(false)
 
 const usable = computed(() => keyItems.value.filter((k) => k.status !== 'REVOKED').length)
 
-function showSecret(k: CreatedApiKey, mode: 'create' | 'rotate') {
-  savedAck.value = false
-  createdMode.value = mode
-  created.value = k
+const scopeOf = (app: string) => `keys:${app}`
+const pending = ref<PendingCommand | null>(null)
+const rechecking = ref(false)
+watch(appId, (a) => (pending.value = a ? getPendingCommand(scopeOf(a)) : null), { immediate: true })
+
+const lookupKey = (cmd: PendingCommand) =>
+  api.keys.lookupCommand(cmd.commandId, {
+    appId: cmd.params.appId,
+    operation: cmd.params.operation as KeyCommandOperation,
+    keyId: cmd.params.keyId || undefined,
+  })
+
+const OP_LABEL: Record<KeyCommandOperation, string> = { 'keys.create': '创建', 'keys.rotate': '轮换', 'keys.revoke': '撤销' }
+
+function settle(op: KeyCommandOperation, outcome: CommandOutcome<KeyCommandApplied>) {
+  const label = OP_LABEL[op]
+  if (outcome.state === 'PENDING') {
+    pending.value = appId.value ? getPendingCommand(scopeOf(appId.value)) : null
+    toast.warning(`${label}结果待确认`, { description: '请求已发出但未收到确定结果，请稍后重新查询，不要重复操作。' })
+    return
+  }
+  pending.value = null
+  keys.reload()
+  const { key, secret } = outcome.result
+  if (op === 'keys.revoke') {
+    toast.success(outcome.recovered ? '已确认密钥撤销成功' : '密钥已撤销', { description: key.keyId })
+    return
+  }
+  if (secret !== null) {
+    savedAck.value = false
+    createdMode.value = op === 'keys.rotate' ? 'rotate' : 'create'
+    created.value = { key, secret }
+    return
+  }
+  // 结果经按原号查询确认：已生效，但明文密钥不会再次返回
+  toast.warning(`密钥已${label}，但明文无法再次获取`, {
+    description: `新密钥 ${key.keyId} 的明文已丢失，请立即撤销或再次轮换该密钥后重新保存。`,
+    duration: 15000,
+  })
+}
+
+async function send(op: KeyCommandOperation, key?: ApiKey) {
+  const app = appId.value
+  return runCommand({
+    scope: scopeOf(app),
+    params: { appId: app, operation: op, keyId: key?.keyId ?? '' },
+    send: (commandId) =>
+      op === 'keys.create'
+        ? api.keys.create(commandId, app)
+        : op === 'keys.rotate'
+          ? api.keys.rotate(commandId, app, key!.keyId)
+          : api.keys.revoke(commandId, app, key!.keyId),
+    lookup: lookupKey,
+  })
 }
 
 async function createKey() {
-  if (!appId.value) return
+  if (!appId.value || pending.value) return
   creating.value = true
   try {
-    showSecret(await api.keys.create(appId.value), 'create')
-    keys.reload()
+    settle('keys.create', await send('keys.create'))
   } catch (e) {
     toast.error('创建失败', { description: e instanceof Error ? e.message : undefined })
   } finally {
@@ -64,23 +115,36 @@ async function createKey() {
 }
 
 async function runConfirm() {
-  if (!confirm.value) return
+  if (!confirm.value || pending.value) return
   const { kind, key } = confirm.value
+  const op: KeyCommandOperation = kind === 'rotate' ? 'keys.rotate' : 'keys.revoke'
   confirming.value = true
   try {
-    if (kind === 'rotate') {
-      showSecret(await api.keys.rotate(key.keyId), 'rotate')
-    } else {
-      await api.keys.revoke(key.keyId)
-      toast.success('密钥已撤销', { description: key.keyId })
-    }
+    settle(op, await send(op, key))
     confirm.value = null
-    keys.reload()
   } catch (e) {
     toast.error(kind === 'rotate' ? '轮换失败' : '撤销失败', { description: e instanceof Error ? e.message : undefined })
   } finally {
     confirming.value = false
   }
+}
+
+async function recheck() {
+  const p = pending.value
+  if (!p) return
+  rechecking.value = true
+  try {
+    settle(p.params.operation as KeyCommandOperation, await lookupUntilKnown(p, lookupKey, { attempts: 1, intervalMs: 0 }))
+  } finally {
+    rechecking.value = false
+  }
+}
+
+function abandon() {
+  if (!appId.value) return
+  forgetCommand(scopeOf(appId.value))
+  pending.value = null
+  keys.reload()
 }
 
 const muted = (t: string) => h('span', { class: 'whitespace-nowrap text-muted-foreground tabular' }, t)
@@ -133,7 +197,7 @@ const columns: ColumnDef<ApiKey>[] = [
       <template #actions>
         <Select v-model="appId" :options="options" aria-label="选择应用" class="w-60" />
         <AppPickerStatus :apps="apps" />
-        <Button variant="primary" :loading="creating" :disabled="!appId" @click="createKey"><Plus aria-hidden="true" />创建密钥</Button>
+        <Button variant="primary" :loading="creating" :disabled="!appId || !!pending" @click="createKey"><Plus aria-hidden="true" />创建密钥</Button>
       </template>
     </PageHeader>
 
@@ -146,6 +210,17 @@ const columns: ColumnDef<ApiKey>[] = [
       <p>
         当前为<strong class="font-semibold">生产环境</strong>应用。轮换密钥后旧密钥会在过渡期结束后失效，请在过渡期内完成服务端配置更新。过渡期时长以正式密钥策略为准，当前 Mock 演示为 24 小时。
       </p>
+    </div>
+
+    <div v-if="pending" role="status" class="flex flex-col gap-3 rounded-lg border border-warning/40 bg-warning-soft p-3 text-[13px] sm:flex-row sm:items-center">
+      <p class="flex-1">
+        上一次{{ OP_LABEL[pending.params.operation as KeyCommandOperation] }}请求（命令号
+        <span class="font-mono">{{ pending.commandId }}</span>）结果尚未确认。确认前已暂停其他密钥操作，以免重复生效。
+      </p>
+      <div class="flex gap-2">
+        <Button size="sm" variant="primary" :loading="rechecking" @click="recheck">重新查询结果</Button>
+        <Button size="sm" variant="ghost" :disabled="rechecking" @click="abandon">已核实，放弃此请求</Button>
+      </div>
     </div>
 
     <Card body-class="p-0">
@@ -179,13 +254,13 @@ const columns: ColumnDef<ApiKey>[] = [
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">Key ID</span>
           <div class="flex items-center gap-2 rounded-md bg-muted px-3 py-2 font-mono text-[13px]">
-            <span class="flex-1 break-all">{{ created.keyId }}</span><CopyButton :value="created.keyId" />
+            <span class="flex-1 break-all">{{ created.key.keyId }}</span><CopyButton :value="created.key.keyId" />
           </div>
         </div>
         <div class="flex flex-col gap-1.5">
           <span class="text-xs font-medium text-muted-foreground">Secret</span>
           <div class="flex items-center gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 font-mono text-[13px]">
-            <span class="flex-1 break-all">{{ created.plainSecret }}</span><CopyButton :value="created.plainSecret" label="复制密钥" />
+            <span class="flex-1 break-all">{{ created.secret }}</span><CopyButton :value="created.secret" label="复制密钥" />
           </div>
         </div>
         <label class="flex items-center gap-2 text-[13px]">

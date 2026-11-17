@@ -48,6 +48,26 @@ import {
 import { isCountSum, isExactCount, MAX_PAGE } from '@/utils/count'
 import { isConsistentPage } from '@/utils/page'
 import { request, seg } from './client'
+import {
+  KEY_COMMAND_VIEW_VERSION,
+  STORE_COMMAND_VIEW_VERSION,
+  WEBHOOK_COMMAND_VIEW_VERSION,
+  type StoreCommandInput,
+} from '@/types/command'
+import {
+  parseKeyCommand,
+  parseStoreCommand,
+  parseStoreEdit,
+  parseWebhookCommand,
+  parseWebhookEdit,
+  parseWebhookTest,
+} from './commands'
+
+const storeBody = (input: StoreCommandInput) => ({
+  merchantStoreNo: input.merchantStoreNo.trim(),
+  name: input.name.trim(),
+  status: input.status,
+})
 
 const PNG_DATA_URL = /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/
 
@@ -633,8 +653,38 @@ export const httpApi: MerchantApi = {
     all: async () => (await httpApi.stores.options()).items,
     get: async (id) => parseSingle<StoreViewSingle>(await request<unknown>(`/stores/${seg(id)}`), STORE_VIEW_VERSION, 'store', checkStore, '门店详情'),
     stats: async (storeCode) => parseStoreStats(await request<unknown>(`/stores/${seg(storeCode)}/stats`, { query: REPORT_QUERY })),
-    create: (input) => request('/stores', { method: 'POST', body: input }),
-    update: (id, input) => request(`/stores/${seg(id)}`, { method: 'PUT', body: input }),
+    editView: async (storeCode) =>
+      parseStoreEdit(
+        await request<unknown>(`/stores/${seg(storeCode)}/edit`, { query: { viewVersion: STORE_COMMAND_VIEW_VERSION } }),
+        storeCode,
+      ),
+    create: async (commandId, input) =>
+      parseStoreCommand(
+        await request<unknown>('/stores', {
+          method: 'POST',
+          body: { viewVersion: STORE_COMMAND_VIEW_VERSION, commandId, ...storeBody(input) },
+        }),
+        commandId,
+      ),
+    update: async (commandId, storeCode, expectedConfigurationVersion, input) =>
+      parseStoreCommand(
+        await request<unknown>(`/stores/${seg(storeCode)}`, {
+          method: 'PUT',
+          body: { viewVersion: STORE_COMMAND_VIEW_VERSION, commandId, expectedConfigurationVersion, ...storeBody(input) },
+        }),
+        commandId,
+      ),
+    lookupCommand: async (commandId, q) =>
+      parseStoreCommand(
+        await request<unknown>(`/store-commands/${seg(commandId)}`, {
+          query: {
+            viewVersion: STORE_COMMAND_VIEW_VERSION,
+            operation: q.operation,
+            ...(q.operation === 'stores.update' ? { storeCode: q.storeCode } : {}),
+          },
+        }),
+        commandId,
+      ),
   },
   apps: {
     list: async (query) => parsePage<AppViewPage>(await request<unknown>('/apps', { query: { ...query } }), APP_VIEW_VERSION, checkApp, 'App 列表'),
@@ -648,9 +698,46 @@ export const httpApi: MerchantApi = {
         'API Key 列表',
         isConsistentKey(query.appId),
       ),
-    create: (appId) => request(`/apps/${seg(appId)}/api-keys`, { method: 'POST' }),
-    rotate: (keyId) => request(`/api-keys/${seg(keyId)}/rotate`, { method: 'POST' }),
-    revoke: (keyId) => request(`/api-keys/${seg(keyId)}/revoke`, { method: 'POST' }),
+    create: async (commandId, appId) =>
+      parseKeyCommand(
+        await request<unknown>(`/apps/${seg(appId)}/api-keys`, {
+          method: 'POST',
+          body: { viewVersion: KEY_COMMAND_VIEW_VERSION, commandId },
+        }),
+        commandId,
+        appId,
+      ),
+    rotate: async (commandId, appId, keyId) =>
+      parseKeyCommand(
+        await request<unknown>(`/api-keys/${seg(keyId)}/rotate`, {
+          method: 'POST',
+          body: { viewVersion: KEY_COMMAND_VIEW_VERSION, commandId, appId },
+        }),
+        commandId,
+        appId,
+      ),
+    revoke: async (commandId, appId, keyId) =>
+      parseKeyCommand(
+        await request<unknown>(`/api-keys/${seg(keyId)}/revoke`, {
+          method: 'POST',
+          body: { viewVersion: KEY_COMMAND_VIEW_VERSION, commandId, appId },
+        }),
+        commandId,
+        appId,
+      ),
+    lookupCommand: async (commandId, q) =>
+      parseKeyCommand(
+        await request<unknown>(`/api-key-commands/${seg(commandId)}`, {
+          query: {
+            viewVersion: KEY_COMMAND_VIEW_VERSION,
+            appId: q.appId,
+            operation: q.operation,
+            ...(q.operation === 'keys.create' ? {} : { keyId: q.keyId }),
+          },
+        }),
+        commandId,
+        q.appId,
+      ),
   },
   webhooks: {
     getConfig: async (appId) =>
@@ -658,9 +745,47 @@ export const httpApi: MerchantApi = {
         await request<unknown>(`/apps/${seg(appId)}/webhook`, { query: { viewVersion: DEVELOPER_READ_VIEW_VERSION } }),
         appId,
       ),
-    updateConfig: (appId, input) =>
-      request(`/apps/${seg(appId)}/webhook`, { method: 'PUT', body: { url: input.url, enabled: input.enabled } }),
-    sendTest: (appId) => request(`/apps/${seg(appId)}/webhook/test`, { method: 'POST' }),
+    editView: async (appId) =>
+      parseWebhookEdit(
+        await request<unknown>(`/apps/${seg(appId)}/webhook/edit`, { query: { viewVersion: WEBHOOK_COMMAND_VIEW_VERSION } }),
+        appId,
+      ),
+    updateConfig: async (commandId, appId, expectedConfigurationVersion, input) =>
+      parseWebhookCommand(
+        await request<unknown>(`/apps/${seg(appId)}/webhook`, {
+          method: 'PUT',
+          body: {
+            viewVersion: WEBHOOK_COMMAND_VIEW_VERSION,
+            commandId,
+            expectedConfigurationVersion,
+            url: input.url,
+            enabled: input.enabled,
+          },
+        }),
+        commandId,
+      ),
+    lookupSave: async (commandId, appId) =>
+      parseWebhookCommand(
+        await request<unknown>(`/apps/${seg(appId)}/webhook/commands/${seg(commandId)}`, {
+          query: { viewVersion: WEBHOOK_COMMAND_VIEW_VERSION },
+        }),
+        commandId,
+      ),
+    sendTest: async (commandId, appId) =>
+      parseWebhookTest(
+        await request<unknown>(`/apps/${seg(appId)}/webhook/test`, {
+          method: 'POST',
+          body: { viewVersion: WEBHOOK_COMMAND_VIEW_VERSION, commandId },
+        }),
+        commandId,
+      ),
+    lookupTest: async (commandId, appId) =>
+      parseWebhookTest(
+        await request<unknown>(`/apps/${seg(appId)}/webhook/test/commands/${seg(commandId)}`, {
+          query: { viewVersion: WEBHOOK_COMMAND_VIEW_VERSION },
+        }),
+        commandId,
+      ),
     deliveries: async (query) =>
       parseDeveloperPage<WebhookDelivery>(
         await request<unknown>('/webhook-deliveries', { query: { ...query, viewVersion: DEVELOPER_READ_VIEW_VERSION } }),

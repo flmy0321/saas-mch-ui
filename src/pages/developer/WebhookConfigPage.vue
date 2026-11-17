@@ -19,11 +19,23 @@ import { api } from '@/services/api'
 import { WEBHOOK_EVENT, webhookEventLabel } from '@/utils/dictionaries'
 import { formatDateTime } from '@/utils/format'
 import type { WebhookEventType } from '@/types'
+import {
+  forgetCommand,
+  getPendingCommand,
+  isVersionConflict,
+  lookupUntilKnown,
+  runCommand,
+  type PendingCommand,
+} from '@/services/commands'
+import type { CommandOutcome, WebhookCommandApplied, WebhookTestResult } from '@/types/command'
 
 const eventTypes = Object.keys(WEBHOOK_EVENT) as WebhookEventType[]
 
 const { apps, options, appId } = useAppPicker()
 const config = useAsync(() => (appId.value ? api.webhooks.getConfig(appId.value) : Promise.resolve(null)), { watch: appId })
+
+/** 编辑视图携带 configurationVersion（十进制字符串），保存时原样回传用于冲突检测 */
+const edit = useAsync(() => (appId.value ? api.webhooks.editView(appId.value) : Promise.resolve(null)), { watch: appId })
 
 const cfg = computed(() => config.data.value?.config ?? null)
 const form = reactive<{ url: string; enabled: boolean }>({ url: '', enabled: false })
@@ -60,28 +72,129 @@ const dirty = computed(() => {
   return (c.url ?? '') !== form.url || c.enabled !== form.enabled
 })
 
+const saveScope = (app: string) => `webhook.save:${app}`
+const testScope = (app: string) => `webhook.test:${app}`
+const pendingSave = ref<PendingCommand | null>(null)
+const pendingTest = ref<PendingCommand | null>(null)
+watch(
+  appId,
+  (a) => {
+    pendingSave.value = a ? getPendingCommand(saveScope(a)) : null
+    pendingTest.value = a ? getPendingCommand(testScope(a)) : null
+  },
+  { immediate: true },
+)
+
+function reloadAll() {
+  config.reload()
+  edit.reload()
+}
+
+function settleSave(outcome: CommandOutcome<WebhookCommandApplied>) {
+  if (outcome.state === 'PENDING') {
+    pendingSave.value = getPendingCommand(saveScope(appId.value))
+    toast.warning('保存结果待确认', { description: '请求已发出但未收到确定结果，请稍后重新查询，不要重复提交。' })
+    return
+  }
+  pendingSave.value = null
+  toast.success(outcome.recovered ? '已确认配置保存成功' : 'Webhook 配置已保存')
+  reloadAll()
+}
+
+function settleTest(outcome: CommandOutcome<WebhookTestResult>) {
+  if (outcome.state === 'PENDING') {
+    pendingTest.value = getPendingCommand(testScope(appId.value))
+    testResult.value = { ok: false, text: '测试结果待确认，请稍后重新查询' }
+    return
+  }
+  pendingTest.value = null
+  const r = outcome.result
+  if (r.status === 'NOT_SENT') {
+    testResult.value = { ok: false, text: `未能发出请求 · 耗时 ${r.durationMs} ms` }
+    return
+  }
+  // 只有对端返回 2xx 才算推送成功；500 等非 2xx 一律按失败展示
+  const ok = r.httpStatus >= 200 && r.httpStatus < 300
+  testResult.value = { ok, text: `对端返回 HTTP ${r.httpStatus} · 耗时 ${r.durationMs} ms` }
+}
+
+const lookupSave = (cmd: PendingCommand) => api.webhooks.lookupSave(cmd.commandId, cmd.params.appId)
+const lookupTest = (cmd: PendingCommand) => api.webhooks.lookupTest(cmd.commandId, cmd.params.appId)
+
 async function save() {
   submitted.value = true
-  if (urlError.value) return
+  if (urlError.value || pendingSave.value) return
+  const version = edit.data.value?.configurationVersion
+  if (!version) {
+    toast.error('编辑数据未加载完成，请稍后再试')
+    return
+  }
+  const app = appId.value
+  const input = { url: form.url.trim() || null, enabled: form.enabled }
   saving.value = true
   try {
-    await api.webhooks.updateConfig(appId.value, { url: form.url.trim() || null, enabled: form.enabled })
-    toast.success('Webhook 配置已保存')
-    config.reload()
+    settleSave(
+      await runCommand({
+        scope: saveScope(app),
+        params: { appId: app },
+        send: (commandId) => api.webhooks.updateConfig(commandId, app, version, input),
+        lookup: lookupSave,
+      }),
+    )
   } catch (e) {
+    if (isVersionConflict(e)) {
+      toast.error('配置已被其他人修改', { description: '已重新读取最新配置，请核对后再保存。' })
+      reloadAll()
+      return
+    }
     toast.error('保存失败', { description: e instanceof Error ? e.message : undefined })
   } finally {
     saving.value = false
   }
 }
 
+async function recheckSave() {
+  if (!pendingSave.value) return
+  saving.value = true
+  try {
+    settleSave(await lookupUntilKnown(pendingSave.value, lookupSave, { attempts: 1, intervalMs: 0 }))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function recheckTest() {
+  if (!pendingTest.value) return
+  testing.value = true
+  try {
+    settleTest(await lookupUntilKnown(pendingTest.value, lookupTest, { attempts: 1, intervalMs: 0 }))
+  } finally {
+    testing.value = false
+  }
+}
+
+function abandonPending() {
+  forgetCommand(saveScope(appId.value))
+  forgetCommand(testScope(appId.value))
+  pendingSave.value = null
+  pendingTest.value = null
+  reloadAll()
+}
+
 async function sendTest() {
+  if (pendingTest.value) return
+  const app = appId.value
   testing.value = true
   testResult.value = null
   try {
-    const r = await api.webhooks.sendTest(appId.value)
-    const ok = r.httpStatus >= 200 && r.httpStatus < 300
-    testResult.value = { ok, text: `HTTP ${r.httpStatus} · 耗时 ${r.durationMs} ms` }
+    settleTest(
+      await runCommand({
+        scope: testScope(app),
+        params: { appId: app },
+        send: (commandId) => api.webhooks.sendTest(commandId, app),
+        lookup: lookupTest,
+      }),
+    )
   } catch (e) {
     testResult.value = { ok: false, text: e instanceof Error ? e.message : '推送失败' }
   } finally {
@@ -105,6 +218,29 @@ function reset() {
         <Button :as="RouterLink" :to="{ path: '/developer/deliveries', query: { appId } }">通知记录<ArrowRight aria-hidden="true" /></Button>
       </template>
     </PageHeader>
+
+    <div
+      v-if="pendingSave || pendingTest"
+      role="status"
+      class="flex flex-col gap-3 rounded-lg border border-warning/40 bg-warning-soft p-3 text-[13px] sm:flex-row sm:items-center"
+    >
+      <p class="flex-1">
+        上一次{{ pendingSave ? '保存' : '测试' }}请求（命令号
+        <span class="font-mono">{{ (pendingSave ?? pendingTest)!.commandId }}</span>）结果尚未确认，请先重新查询，不要重复提交。
+      </p>
+      <div class="flex gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="primary"
+          :loading="saving || testing"
+          @click="pendingSave ? recheckSave() : recheckTest()"
+        >
+          重新查询结果
+        </Button>
+        <Button type="button" size="sm" variant="ghost" :disabled="saving || testing" @click="abandonPending">已核实，放弃此请求</Button>
+      </div>
+    </div>
 
     <ErrorState v-if="config.error.value" :message="config.error.value" class="py-20" @retry="config.reload()" />
     <div v-else-if="!config.data.value" class="flex flex-col gap-4"><Skeleton class="h-40" /><Skeleton class="h-56" /></div>
@@ -155,7 +291,7 @@ function reset() {
           <span v-if="config.data.value" class="mr-auto text-xs text-muted-foreground tabular">数据截至 {{ formatDateTime(config.data.value.asOf) }}</span>
           <span v-else class="mr-auto" />
           <Button type="button" :disabled="!dirty || saving" @click="reset">放弃修改</Button>
-          <Button type="submit" variant="primary" :loading="saving" :disabled="!dirty">保存配置</Button>
+          <Button type="submit" variant="primary" :loading="saving" :disabled="!dirty || !!pendingSave || !edit.data.value">保存配置</Button>
         </div>
       </div>
 

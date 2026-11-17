@@ -7,25 +7,29 @@ import FormField from '@/components/ui/FormField.vue'
 import Input from '@/components/ui/Input.vue'
 import Switch from '@/components/ui/Switch.vue'
 import { api } from '@/services/api'
-import type { Store, StoreInput } from '@/types'
+import { forgetCommand, getPendingCommand, lookupUntilKnown, runCommand, type PendingCommand } from '@/services/commands'
+import type { CommandOutcome, StoreCommandApplied, StoreCommandInput } from '@/types/command'
 
 /**
- * 仅用于新建门店（写入仍为旧 StoreInput 模型）。
- * 编辑已关闭：0.1 只读视图不含地址/联系人，门店写契约与完整编辑数据源尚未评审，
- * 不能从精简视图预填空值或让用户重填后台已有的资料。
+ * 新建门店（stores.create 命令）。命令只接受 merchantStoreNo / name / status；
+ * 地址与联系人不在门店命令契约内，这里不再收集。
  */
-const open = defineModel<boolean>('open', { default: false })
-const emit = defineEmits<{ saved: [store: Store] }>()
+const SCOPE = 'stores.create'
 
-const empty = (): StoreInput => ({ name: '', merchantStoreNo: '', address: '', contactName: '', contactPhone: '', status: 'ACTIVE' })
-const form = reactive<StoreInput>(empty())
+const open = defineModel<boolean>('open', { default: false })
+const emit = defineEmits<{ saved: [storeCode: string | null] }>()
+
+const empty = (): StoreCommandInput => ({ name: '', merchantStoreNo: '', status: 'ACTIVE' })
+const form = reactive<StoreCommandInput>(empty())
 const submitted = ref(false)
 const saving = ref(false)
+const pending = ref<PendingCommand | null>(null)
 
 watch(open, (v) => {
   if (!v) return
   submitted.value = false
   Object.assign(form, empty())
+  pending.value = getPendingCommand(SCOPE)
 })
 
 const active = computed({
@@ -40,32 +44,75 @@ const errors = computed(() => ({
     : !/^[A-Za-z0-9_-]{2,32}$/.test(form.merchantStoreNo)
       ? '2-32 位字母、数字、下划线或短横线'
       : null,
-  address: !form.address.trim() ? '请输入门店地址' : null,
-  contactName: !form.contactName.trim() ? '请输入联系人' : null,
-  contactPhone: !/^1\d{10}$|^0\d{2,3}-?\d{7,8}$/.test(form.contactPhone) ? '请输入有效的手机号或座机号' : null,
 }))
 const err = (k: keyof typeof errors.value) => (submitted.value ? errors.value[k] : null)
 
+function settle(outcome: CommandOutcome<StoreCommandApplied>) {
+  if (outcome.state === 'PENDING') {
+    pending.value = getPendingCommand(SCOPE)
+    toast.warning('创建结果待确认', { description: '请求已发出但未收到确定结果，请稍后重新查询，不要重复提交。' })
+    return
+  }
+  pending.value = null
+  toast.success(outcome.recovered ? '已确认门店创建成功' : '门店已创建', { description: outcome.result.store.name })
+  emit('saved', outcome.result.store.storeCode)
+  open.value = false
+}
+
 async function save() {
   submitted.value = true
-  if (Object.values(errors.value).some(Boolean)) return
+  if (pending.value || Object.values(errors.value).some(Boolean)) return
   saving.value = true
   try {
-    const payload: StoreInput = { ...form, name: form.name.trim(), address: form.address.trim() }
-    const saved = await api.stores.create(payload)
-    toast.success('门店已创建', { description: saved.name })
-    emit('saved', saved)
-    open.value = false
+    const input: StoreCommandInput = { ...form }
+    settle(
+      await runCommand({
+        scope: SCOPE,
+        params: { operation: 'stores.create' },
+        send: (commandId) => api.stores.create(commandId, input),
+        lookup: (cmd) => api.stores.lookupCommand(cmd.commandId, { operation: 'stores.create' }),
+      }),
+    )
   } catch (e) {
     toast.error('保存失败', { description: e instanceof Error ? e.message : undefined })
   } finally {
     saving.value = false
   }
 }
+
+async function recheck() {
+  if (!pending.value) return
+  saving.value = true
+  try {
+    settle(
+      await lookupUntilKnown(pending.value, (cmd) => api.stores.lookupCommand(cmd.commandId, { operation: 'stores.create' }), {
+        attempts: 1,
+        intervalMs: 0,
+      }),
+    )
+  } finally {
+    saving.value = false
+  }
+}
+
+function abandon() {
+  forgetCommand(SCOPE)
+  pending.value = null
+  emit('saved', null)
+}
 </script>
 
 <template>
   <Drawer v-model:open="open" title="新建门店" description="门店用于区分交易来源，创建支付订单时可指定门店。">
+    <div v-if="pending" role="status" class="mb-4 flex flex-col gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-[13px]">
+      <p>
+        上一次创建请求（命令号 <span class="font-mono">{{ pending.commandId }}</span>）结果尚未确认。请先重新查询；确认未生效前不要再次提交，以免重复创建。
+      </p>
+      <div class="flex flex-wrap gap-2">
+        <Button size="sm" variant="primary" :loading="saving" @click="recheck">重新查询结果</Button>
+        <Button size="sm" variant="ghost" :disabled="saving" @click="abandon">已在门店列表核实，放弃此请求</Button>
+      </div>
+    </div>
     <form id="store-form" class="flex flex-col gap-4" novalidate @submit.prevent="save">
       <FormField label="门店名称" for="s-name" required :error="err('name')">
         <Input id="s-name" v-model="form.name" placeholder="如：静安嘉里中心店" :invalid="!!err('name')" />
@@ -73,17 +120,6 @@ async function save() {
       <FormField label="商户门店编号" for="s-no" required hint="商户系统内的门店唯一编号" :error="err('merchantStoreNo')">
         <Input id="s-no" v-model="form.merchantStoreNo" class="font-mono" placeholder="如 SH-JA-001" :invalid="!!err('merchantStoreNo')" />
       </FormField>
-      <FormField label="门店地址" for="s-addr" required :error="err('address')">
-        <Input id="s-addr" v-model="form.address" :invalid="!!err('address')" />
-      </FormField>
-      <div class="grid gap-4 sm:grid-cols-2">
-        <FormField label="联系人" for="s-contact" required :error="err('contactName')">
-          <Input id="s-contact" v-model="form.contactName" :invalid="!!err('contactName')" />
-        </FormField>
-        <FormField label="联系电话" for="s-phone" required :error="err('contactPhone')">
-          <Input id="s-phone" v-model="form.contactPhone" inputmode="tel" class="tabular" :invalid="!!err('contactPhone')" />
-        </FormField>
-      </div>
       <div class="flex items-center justify-between rounded-lg border border-border p-3">
         <div>
           <label for="s-status" class="text-[13px] font-medium">启用门店</label>
@@ -94,7 +130,7 @@ async function save() {
     </form>
     <template #footer>
       <Button @click="open = false">取消</Button>
-      <Button variant="primary" type="submit" form="store-form" :loading="saving">创建门店</Button>
+      <Button variant="primary" type="submit" form="store-form" :loading="saving" :disabled="!!pending">创建门店</Button>
     </template>
   </Drawer>
 </template>

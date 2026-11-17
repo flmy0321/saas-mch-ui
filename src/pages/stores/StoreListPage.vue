@@ -20,7 +20,7 @@ import { useQueryFilters } from '@/composables/useQueryFilters'
 import { api } from '@/services/api'
 import { STORE_VIEW_STATUS, storeViewStatusMeta, toOptions } from '@/utils/dictionaries'
 import { formatDateTime, formatNumber } from '@/utils/format'
-import type { Store, StoreView } from '@/types'
+import type { StoreView } from '@/types'
 
 const router = useRouter()
 const filters = useQueryFilters({ keyword: '', status: '' })
@@ -66,9 +66,9 @@ h('span', { class: 'font-medium' }, row.original.name),
   { id: 'createdAt', header: '创建时间', cell: ({ row }) => muted(formatDateTime(row.original.createdAt)) },
 ]
 
-function onSaved(s: Store) {
+function onSaved(storeCode: string | null) {
   list.reload()
-  router.push(`/stores/${s.id}`)
+  if (storeCode) router.push(`/stores/${storeCode}`)
 }
 </script>
 

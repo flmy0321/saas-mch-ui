@@ -31,6 +31,14 @@ import {
 } from '@/types'
 import { ApiError, type ApiErrorInit, type MerchantApi } from '@/services/api/types'
 import {
+  STORE_COMMAND_VIEW_VERSION,
+  WEBHOOK_COMMAND_VIEW_VERSION,
+  type CommandReply,
+  type KeyCommandApplied,
+  type StoreCommandInput,
+  type StoreCommandStore,
+} from '@/types/command'
+import {
   GLOBAL_SEARCH_VIEW_VERSION,
   type GlobalSearchGroup,
   type GlobalSearchItem,
@@ -593,6 +601,86 @@ function validateStore(input: { name: string; merchantStoreNo: string }, exceptI
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* 写命令：同一 commandId 只生效一次，可按原号查询                       */
+/* ------------------------------------------------------------------ */
+
+interface LoggedCommand {
+  operation: string
+  ref: string
+  reply: CommandReply<unknown>
+}
+
+const commandLog = new Map<string, LoggedCommand>()
+const configVersions = new Map<string, bigint>()
+const storeUpdatedAt = new Map<string, string>()
+
+/** 测试注入：下一次匹配的操作照常生效，但丢弃响应（模拟断线），用于验证按原号恢复 */
+export const mockCommandFaults = {
+  dropResponse: new Set<string>(),
+  /** 下一次查询仍返回 NOT_OBSERVED 的次数 */
+  hideFromLookup: 0,
+}
+
+function versionOf(key: string): string {
+  return (configVersions.get(key) ?? BigInt(1)).toString()
+}
+
+function bumpVersion(key: string): string {
+  const next = (configVersions.get(key) ?? BigInt(1)) + BigInt(1)
+  configVersions.set(key, next)
+  return next.toString()
+}
+
+function assertVersion(key: string, expected: string) {
+  if (!/^(0|[1-9]\d*)$/.test(expected)) fail('expectedConfigurationVersion 必须为十进制字符串', 'VALIDATION', 400)
+  if (expected !== versionOf(key)) fail('配置已被其他操作修改，请重新读取后再保存', 'VERSION_CONFLICT', 409)
+}
+
+function runOnce<T>(commandId: string, operation: string, ref: string, run: () => T): CommandReply<T> {
+  if (!commandId) fail('缺少 commandId', 'VALIDATION', 400)
+  const prior = commandLog.get(commandId)
+  if (prior) {
+    if (prior.operation !== operation || prior.ref !== ref) fail('该命令号已用于其他操作', 'COMMAND_ID_CONFLICT', 409)
+    return prior.reply as CommandReply<T>
+  }
+  const reply: CommandReply<T> = { status: 'APPLIED', result: run() }
+  commandLog.set(commandId, { operation, ref, reply })
+  if (mockCommandFaults.dropResponse.delete(operation)) fail('网络连接中断（Mock 注入）', 'NETWORK', 0)
+  return reply
+}
+
+function lookupOnce<T>(commandId: string, operation: string, ref: string, redact?: (r: T) => T): CommandReply<T> {
+  if (mockCommandFaults.hideFromLookup > 0) {
+    mockCommandFaults.hideFromLookup--
+    return { status: 'NOT_OBSERVED' }
+  }
+  const prior = commandLog.get(commandId)
+  if (!prior || prior.operation !== operation || prior.ref !== ref) return { status: 'NOT_OBSERVED' }
+  const reply = prior.reply as CommandReply<T>
+  return reply.status === 'APPLIED' && redact ? { status: 'APPLIED', result: redact(reply.result) } : reply
+}
+
+function storeCommandStore(s: Store): StoreCommandStore {
+  return {
+    storeCode: s.id,
+    merchantStoreNo: s.merchantStoreNo,
+    name: s.name,
+    status: s.status,
+    createdAt: s.createdAt,
+    updatedAt: storeUpdatedAt.get(s.id) ?? s.createdAt,
+  }
+}
+
+function validateStoreCommand(input: StoreCommandInput, exceptId?: string) {
+  if (!input.merchantStoreNo.trim()) fail('商户门店编号不能为空', 'VALIDATION', 400)
+  if (input.status !== 'ACTIVE' && input.status !== 'DISABLED') fail('门店状态只能为 ACTIVE 或 DISABLED', 'VALIDATION', 400)
+  validateStore(input, exceptId)
+}
+
+/** 查询结果不再包含明文密钥 */
+const withoutSecret = (r: KeyCommandApplied): KeyCommandApplied => ({ ...r, secret: null })
+
 const protectedApi: Omit<MerchantApi, 'auth'> = {
   dashboard: {
     summary: () =>
@@ -776,39 +864,50 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
           points: completedPoints(30, { storeId: s.id }),
         }
       }),
-    create: (input) =>
-      delay(() => {
-        validateStore(input)
-        const seq = stores.length + 1
-        const s: Store = {
-          id: `st_${seq}_${randomHex(4)}`,
-          storeNo: `S${merchant.merchantNo.slice(1)}${pad(seq, 3)}`,
-          merchantStoreNo: input.merchantStoreNo.trim(),
-          name: input.name.trim(),
-          status: input.status,
-          address: input.address.trim(),
-          contactName: input.contactName.trim(),
-          contactPhone: input.contactPhone.trim(),
-          createdAt: new Date().toISOString(),
-        }
-        stores.unshift(s)
-        return s
-      }, 500),
-    update: (id, input) =>
-      delay(() => {
-        const s = findStore(id)
-        validateStore(input, id)
-        Object.assign(s, {
-          name: input.name.trim(),
-          merchantStoreNo: input.merchantStoreNo.trim(),
-          address: input.address.trim(),
-          contactName: input.contactName.trim(),
-          contactPhone: input.contactPhone.trim(),
-          status: input.status,
-        })
-        payments.forEach((p) => p.storeId === id && (p.storeName = s.name))
-        return s
-      }, 500),
+    editView: (storeCode) =>
+      delay(() => ({
+        viewVersion: STORE_COMMAND_VIEW_VERSION,
+        configurationVersion: versionOf(`store:${storeCode}`),
+        store: storeCommandStore(findStore(storeCode)),
+      })),
+    create: (commandId, input) =>
+      delay(
+        () =>
+          runOnce(commandId, 'stores.create', '', () => {
+            validateStoreCommand(input)
+            const seq = stores.length + 1
+            const s: Store = {
+              id: `st_${seq}_${randomHex(4)}`,
+              storeNo: `S${merchant.merchantNo.slice(1)}${pad(seq, 3)}`,
+              merchantStoreNo: input.merchantStoreNo.trim(),
+              name: input.name.trim(),
+              status: input.status,
+              address: '',
+              contactName: '',
+              contactPhone: '',
+              createdAt: new Date().toISOString(),
+            }
+            stores.unshift(s)
+            return { commandId, configurationVersion: versionOf(`store:${s.id}`), store: storeCommandStore(s) }
+          }),
+        500,
+      ),
+    update: (commandId, storeCode, expectedConfigurationVersion, input) =>
+      delay(
+        () =>
+          runOnce(commandId, 'stores.update', storeCode, () => {
+            const s = findStore(storeCode)
+            assertVersion(`store:${storeCode}`, expectedConfigurationVersion)
+            validateStoreCommand(input, storeCode)
+            Object.assign(s, { name: input.name.trim(), merchantStoreNo: input.merchantStoreNo.trim(), status: input.status })
+            storeUpdatedAt.set(storeCode, new Date().toISOString())
+            payments.forEach((p) => p.storeId === storeCode && (p.storeName = s.name))
+            return { commandId, configurationVersion: bumpVersion(`store:${storeCode}`), store: storeCommandStore(s) }
+          }),
+        500,
+      ),
+    lookupCommand: (commandId, q) =>
+      delay(() => lookupOnce(commandId, q.operation, q.operation === 'stores.update' ? (q.storeCode ?? '') : '')),
   },
 
   apps: {
@@ -835,26 +934,47 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
   keys: {
     list: (q) =>
       delay(() => developerPage(apiKeys.filter((k) => k.appId === q.appId).map(keyView), q.page, q.pageSize)),
-    create: (appId) => delay(() => issueKey(appId), 600),
-    rotate: (keyId) =>
-      delay(() => {
-        const old = apiKeys.find((k) => k.keyId === keyId)
-        if (!old) fail('密钥不存在', 'NOT_FOUND', 404)
-        if (old.status === 'REVOKED' || old.status === 'EXPIRED') fail('该密钥已失效，无法轮换', 'INVALID_STATUS', 409)
-        if (old.status === 'EXPIRING') fail('该密钥处于过渡期，无法再次轮换', 'INVALID_STATUS', 409)
-        const created = issueKey(old.appId)
-        old.status = 'EXPIRING'
-        old.expireAt = new Date(Date.now() + 1 * DAY).toISOString()
-        return created
-      }, 700),
-    revoke: (keyId) =>
-      delay(() => {
-        const k = apiKeys.find((x) => x.keyId === keyId)
-        if (!k) fail('密钥不存在', 'NOT_FOUND', 404)
-        k.status = 'REVOKED'
-        k.expireAt = new Date().toISOString()
-        return keyView(k)
-      }, 500),
+    create: (commandId, appId) =>
+      delay(
+        () =>
+          runOnce(commandId, 'keys.create', appId, () => {
+            const { plainSecret, ...key } = issueKey(appId)
+            return { commandId, configurationVersion: bumpVersion(`keys:${appId}`), key, secret: plainSecret }
+          }),
+        600,
+      ),
+    rotate: (commandId, appId, keyId) =>
+      delay(
+        () =>
+          runOnce(commandId, 'keys.rotate', `${appId}/${keyId}`, () => {
+            const old = apiKeys.find((k) => k.keyId === keyId && k.appId === appId)
+            if (!old) fail('密钥不存在', 'NOT_FOUND', 404)
+            if (old.status === 'REVOKED' || old.status === 'EXPIRED') fail('该密钥已失效，无法轮换', 'INVALID_STATUS', 409)
+            if (old.status === 'EXPIRING') fail('该密钥处于过渡期，无法再次轮换', 'INVALID_STATUS', 409)
+            const { plainSecret, ...key } = issueKey(appId)
+            old.status = 'EXPIRING'
+            old.expireAt = new Date(Date.now() + 1 * DAY).toISOString()
+            return { commandId, configurationVersion: bumpVersion(`keys:${appId}`), key, secret: plainSecret }
+          }),
+        700,
+      ),
+    revoke: (commandId, appId, keyId) =>
+      delay(
+        () =>
+          runOnce(commandId, 'keys.revoke', `${appId}/${keyId}`, () => {
+            const k = apiKeys.find((x) => x.keyId === keyId && x.appId === appId)
+            if (!k) fail('密钥不存在', 'NOT_FOUND', 404)
+            if (k.status === 'REVOKED') fail('该密钥已撤销', 'INVALID_STATUS', 409)
+            k.status = 'REVOKED'
+            k.expireAt = new Date().toISOString()
+            return { commandId, configurationVersion: bumpVersion(`keys:${appId}`), key: keyView(k), secret: null }
+          }),
+        500,
+      ),
+    lookupCommand: (commandId, q) =>
+      delay(() =>
+        lookupOnce(commandId, q.operation, q.operation === 'keys.create' ? q.appId : `${q.appId}/${q.keyId ?? ''}`, withoutSecret),
+      ),
   },
 
   webhooks: {
@@ -868,22 +988,50 @@ const protectedApi: Omit<MerchantApi, 'auth'> = {
           config: { appId: c.appId, url: c.url || null, enabled: c.enabled },
         }
       }),
-    updateConfig: (appId, input) =>
+    editView: (appId) =>
       delay(() => {
         const c = webhookConfigs.find((x) => x.appId === appId)
         if (!c) fail('Webhook 配置不存在', 'NOT_FOUND', 404)
-        if (input.enabled && input.url === null) fail('启用通知时必须填写回调地址', 'VALIDATION', 400)
-        if (input.url !== null && !/^https:\/\/[^\s]+$/.test(input.url)) fail('通知地址必须为 HTTPS 地址', 'VALIDATION', 400)
-        Object.assign(c, { url: input.url ?? '', enabled: input.enabled, updatedAt: new Date().toISOString() })
-        return { appId: c.appId, url: c.url || null, enabled: c.enabled }
-      }, 500),
-    sendTest: (appId) =>
-      delay(() => {
-        const c = webhookConfigs.find((x) => x.appId === appId)
-        if (!c || !c.url) fail('请先配置通知地址', 'VALIDATION', 400)
-        if (!c.enabled) fail('Webhook 未启用，请启用后再测试', 'VALIDATION', 400)
-        return { httpStatus: 200, durationMs: 120 + Math.round(Math.random() * 180) }
-      }, 900),
+        return {
+          viewVersion: WEBHOOK_COMMAND_VIEW_VERSION,
+          configurationVersion: versionOf(`webhook:${appId}`),
+          config: { appId: c.appId, url: c.url || null, enabled: c.enabled },
+        }
+      }),
+    updateConfig: (commandId, appId, expectedConfigurationVersion, input) =>
+      delay(
+        () =>
+          runOnce(commandId, 'webhooks.save', appId, () => {
+            const c = webhookConfigs.find((x) => x.appId === appId)
+            if (!c) fail('Webhook 配置不存在', 'NOT_FOUND', 404)
+            assertVersion(`webhook:${appId}`, expectedConfigurationVersion)
+            if (input.enabled && input.url === null) fail('启用通知时必须填写回调地址', 'VALIDATION', 400)
+            if (input.url !== null && !/^https:\/\/[^\s]+$/.test(input.url)) fail('通知地址必须为 HTTPS 地址', 'VALIDATION', 400)
+            Object.assign(c, { url: input.url ?? '', enabled: input.enabled, updatedAt: new Date().toISOString() })
+            return { commandId, configurationVersion: bumpVersion(`webhook:${appId}`) }
+          }),
+        500,
+      ),
+    lookupSave: (commandId, appId) => delay(() => lookupOnce(commandId, 'webhooks.save', appId)),
+    sendTest: (commandId, appId) =>
+      delay(
+        () =>
+          runOnce(commandId, 'webhooks.test', appId, () => {
+            const c = webhookConfigs.find((x) => x.appId === appId)
+            if (!c || !c.url) fail('请先配置通知地址', 'VALIDATION', 400)
+            if (!c.enabled) fail('Webhook 未启用，请启用后再测试', 'VALIDATION', 400)
+            // Mock 约定：地址含 unreachable 视为无法发出；含 mockStatus=NNN 时对端按该状态码响应
+            if (c.url.includes('unreachable')) return { status: 'NOT_SENT' as const, httpStatus: 0, durationMs: 3000 }
+            const forced = /[?&]mockStatus=(\d{3})\b/.exec(c.url)
+            return {
+              status: 'COMPLETED' as const,
+              httpStatus: forced ? Number(forced[1]) : 200,
+              durationMs: 120 + Math.round(Math.random() * 180),
+            }
+          }),
+        900,
+      ),
+    lookupTest: (commandId, appId) => delay(() => lookupOnce(commandId, 'webhooks.test', appId)),
     deliveries: (q) =>
       delay(() => {
         const kw = q.keyword?.trim()
