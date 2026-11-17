@@ -14,6 +14,7 @@ import StatusBadge from '@/components/ui/StatusBadge.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
+import StoreFormDrawer from '@/components/business/StoreFormDrawer.vue'
 import { useAsync } from '@/composables/useAsync'
 import { useTradeCharts, type SeriesPoint } from '@/composables/useTradeCharts'
 import { buildPaymentColumns } from '@/pages/payments/paymentColumns'
@@ -59,6 +60,11 @@ const items = computed(() =>
 )
 
 const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'merchantOrderNo', 'amount', 'channel', 'status', 'createdAt'] })
+
+const editOpen = ref(false)
+function onSaved(code: string | null) {
+  if (code) store.reload()
+}
 </script>
 
 <template>
@@ -81,10 +87,7 @@ const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'merchant
           </div>
         </template>
         <template #actions>
-          <div class="flex items-center gap-2">
-            <span id="store-edit-disabled" class="text-xs text-muted-foreground">门店写入契约待评审，暂不支持在门户内编辑</span>
-            <Button disabled aria-describedby="store-edit-disabled"><Pencil aria-hidden="true" />编辑门店</Button>
-          </div>
+          <Button :disabled="!storeCode" @click="editOpen = true"><Pencil aria-hidden="true" />编辑门店</Button>
         </template>
       </PageHeader>
 
@@ -140,6 +143,7 @@ const columns = buildPaymentColumns<PaymentListItem>({ include: ['id', 'merchant
         />
       </Card>
 
+      <StoreFormDrawer v-model:open="editOpen" :store-code="storeCode" @saved="onSaved" />
     </template>
   </div>
 </template>
