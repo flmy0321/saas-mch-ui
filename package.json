@@ -7,7 +7,8 @@
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "vue-tsc -b && vite build",
     "typecheck": "vue-tsc -b --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:contract": "vite-node scripts/contract-check.ts"
   },
   "dependencies": {
     "@lucide/vue": "^1.66.0",
@@ -32,6 +33,7 @@
     "tailwindcss": "^4.3.4",
     "typescript": "^5.9.3",
     "vite": "^8.3.5",
+    "vite-node": "^6.0.0",
     "vue-tsc": "^3.3.14"
   }
 }

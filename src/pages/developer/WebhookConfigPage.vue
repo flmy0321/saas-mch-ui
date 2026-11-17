@@ -25,6 +25,7 @@ import {
   isVersionConflict,
   lookupUntilKnown,
   runCommand,
+  webhookTestSucceeded,
   type PendingCommand,
 } from '@/services/commands'
 import type { CommandOutcome, WebhookCommandApplied, WebhookTestResult } from '@/types/command'
@@ -113,8 +114,7 @@ function settleTest(outcome: CommandOutcome<WebhookTestResult>) {
     testResult.value = { ok: false, text: `未能发出请求 · 耗时 ${r.durationMs} ms` }
     return
   }
-  // 只有对端返回 2xx 才算推送成功；500 等非 2xx 一律按失败展示
-  const ok = r.httpStatus >= 200 && r.httpStatus < 300
+  const ok = webhookTestSucceeded(r)
   testResult.value = { ok, text: `对端返回 HTTP ${r.httpStatus} · 耗时 ${r.durationMs} ms` }
 }
 

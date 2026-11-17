@@ -69,6 +69,11 @@ export function isVersionConflict(e: unknown): boolean {
   return e instanceof ApiError && e.httpStatus === 409 && e.code === 'VERSION_CONFLICT'
 }
 
+/** Webhook 测试只有收到对端 2xx 才算投递成功；NOT_SENT 与 500 等一律为失败 */
+export function webhookTestSucceeded(r: { status: 'COMPLETED' | 'NOT_SENT'; httpStatus: number }): boolean {
+  return r.status === 'COMPLETED' && r.httpStatus >= 200 && r.httpStatus < 300
+}
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export interface LookupOptions {
