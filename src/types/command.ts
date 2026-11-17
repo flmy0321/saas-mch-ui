@@ -25,7 +25,8 @@ export interface StoreCommandInput {
 
 export interface StoreCommandStore {
   storeCode: string
-  merchantStoreNo: string
+  /** 历史门店可能没有商户门店号 */
+  merchantStoreNo: string | null
   name: string
   status: StoreWritableStatus
   createdAt: string

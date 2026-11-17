@@ -9,6 +9,7 @@ import Switch from '@/components/ui/Switch.vue'
 import { api, ApiError } from '@/services/api'
 import { forgetCommand, getPendingCommand, lookupUntilKnown, runCommand, type PendingCommand } from '@/services/commands'
 import type { CommandOutcome, ConfigurationVersion, StoreCommandApplied, StoreCommandInput, StoreCommandOperation } from '@/types/command'
+import { emptyStoreForm, storeFormFromEdit, validateStoreForm } from '@/utils/storeForm'
 
 /**
  * 新建（stores.create）与编辑（stores.update）门店。命令只接受 merchantStoreNo / name / status；
@@ -25,7 +26,7 @@ const lookupQuery = computed(() =>
   editing.value ? { operation: operation.value, storeCode: props.storeCode as string } : { operation: operation.value },
 )
 
-const empty = (): StoreCommandInput => ({ name: '', merchantStoreNo: '', status: 'ACTIVE' })
+const empty = emptyStoreForm
 const form = reactive<StoreCommandInput>(empty())
 const version = ref<ConfigurationVersion | null>(null)
 const submitted = ref(false)
@@ -40,7 +41,7 @@ async function loadEditView() {
   loadError.value = null
   try {
     const view = await api.stores.editView(props.storeCode)
-    Object.assign(form, { name: view.store.name, merchantStoreNo: view.store.merchantStoreNo, status: view.store.status })
+    Object.assign(form, storeFormFromEdit(view))
     version.value = view.configurationVersion
   } catch (e) {
     version.value = null
@@ -65,14 +66,7 @@ const active = computed({
   set: (v: boolean) => (form.status = v ? 'ACTIVE' : 'DISABLED'),
 })
 
-const errors = computed(() => ({
-  name: !form.name.trim() ? '请输入门店名称' : form.name.length > 30 ? '不超过 30 个字符' : null,
-  merchantStoreNo: !form.merchantStoreNo.trim()
-    ? '请输入商户门店编号'
-    : !/^[A-Za-z0-9_-]{2,32}$/.test(form.merchantStoreNo)
-      ? '2-32 位字母、数字、下划线或短横线'
-      : null,
-}))
+const errors = computed(() => validateStoreForm(form))
 const err = (k: keyof typeof errors.value) => (submitted.value ? errors.value[k] : null)
 
 const canSubmit = computed(() => !pending.value && !loading.value && (!editing.value || version.value !== null))

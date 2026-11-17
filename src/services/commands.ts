@@ -4,7 +4,7 @@ import type { CommandOutcome, CommandReply } from '@/types/command'
 /**
  * 写命令的发送与按原号恢复。
  * - 发送前生成 commandId 并写入 sessionStorage，刷新页面后仍能用同一号码查询
- * - 202 UNKNOWN、超时、断线：只用同一 commandId 查询，绝不自动重发
+ * - 202 UNKNOWN、超时、断线、502/503/504：只用同一 commandId 查询，绝不自动重发
  * - NOT_OBSERVED 或查询本身失败：保留为待确认，由操作者手动重新查询
  * - 其余错误（含 409 VERSION_CONFLICT）原样抛出，并清除待确认记录
  */
@@ -74,6 +74,16 @@ export function isNoResponse(e: unknown): boolean {
   return e instanceof ApiError && (e.httpStatus === 0 || e.code === 'TIMEOUT' || e.code === 'NETWORK')
 }
 
+/** 网关/代理层错误（502/503/504）：请求可能已被 Core 执行，结果无法确认，只能按原号查询 */
+export function isGatewayUnconfirmed(e: unknown): boolean {
+  return e instanceof ApiError && (e.httpStatus === 502 || e.httpStatus === 503 || e.httpStatus === 504)
+}
+
+/** 首次写请求的结果无法确认：未收到响应，或收到网关错误 */
+export function isWriteOutcomeUnknown(e: unknown): boolean {
+  return isNoResponse(e) || isGatewayUnconfirmed(e)
+}
+
 export function isVersionConflict(e: unknown): boolean {
   return e instanceof ApiError && e.httpStatus === 409 && e.code === 'VERSION_CONFLICT'
 }
@@ -91,11 +101,11 @@ export interface LookupOptions {
   intervalMs?: number
 }
 
-/** 查询暂时不可用：断线/超时、503、会话失效。原号保留，稍后用同一号码再查 */
+/** 查询暂时不可用：断线/超时、502/503/504、会话失效。原号保留，稍后用同一号码再查 */
 export function isLookupUnavailable(e: unknown): boolean {
   return (
-    isNoResponse(e) ||
-    (e instanceof ApiError && (e.httpStatus === 503 || e.httpStatus === 401 || e.code === 'UNAUTHENTICATED'))
+    isWriteOutcomeUnknown(e) ||
+    (e instanceof ApiError && (e.httpStatus === 401 || e.code === 'UNAUTHENTICATED'))
   )
 }
 
@@ -149,7 +159,8 @@ export async function runCommand<T>(opts: {
       return { state: 'APPLIED', result: reply.result, recovered: false }
     }
   } catch (e) {
-    if (!isNoResponse(e)) {
+    // 明确的业务拒绝（含 409 VERSION_CONFLICT 及其他 409 错误码）：结果已确定，清除原号后交给调用方
+    if (!isWriteOutcomeUnknown(e)) {
       forgetCommand(pending.scope)
       throw e
     }

@@ -53,12 +53,13 @@ const STORE_STATUSES = ['ACTIVE', 'DISABLED'] as const
 
 function checkStore(v: unknown, what: string): StoreCommandStore {
   if (!isObj(v)) invalid(what, 'store 缺失')
-  if (!isStr(v.storeCode) || !isStr(v.merchantStoreNo) || !isStr(v.name)) invalid(what, 'store 字段缺失')
+  if (!isStr(v.storeCode) || !isStr(v.name)) invalid(what, 'store 字段缺失')
+  if (v.merchantStoreNo !== null && !isStr(v.merchantStoreNo)) invalid(what, 'store.merchantStoreNo 不合法')
   if (!STORE_STATUSES.includes(v.status as never)) invalid(what, 'store.status 不合法')
   if (!isStr(v.createdAt) || !isStr(v.updatedAt)) invalid(what, 'store 时间字段缺失')
   return {
     storeCode: v.storeCode,
-    merchantStoreNo: v.merchantStoreNo,
+    merchantStoreNo: v.merchantStoreNo as string | null,
     name: v.name,
     status: v.status as StoreCommandStore['status'],
     createdAt: v.createdAt,

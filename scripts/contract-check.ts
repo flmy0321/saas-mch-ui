@@ -511,5 +511,189 @@ await check('首页 total 与条目一致时接受', () => {
   assert.equal(parseDeliveryPage(devPage({ total: '1', items: [delivery] })).items.length, 1)
 })
 
+/* ---------- 复验：网关错误保留原号、历史门店无商户门店号 ---------- */
+const { parseStoreEdit } = await import('../src/services/http/commands')
+const { storeFormFromEdit, validateStoreForm, storeFormValid } = await import('../src/utils/storeForm')
+const storeRow = (merchantStoreNo: string | null) => ({
+  storeCode: 'sto_1',
+  merchantStoreNo,
+  name: '西湖店',
+  status: 'ACTIVE',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-11-17T00:00:00.000Z',
+})
+const storeApplied = (commandId: string, merchantStoreNo: string | null = 'HZ-001') => ({
+  viewVersion: STORE_V,
+  outcome: 'APPLIED',
+  commandId,
+  configurationVersion: '8',
+  store: storeRow(merchantStoreNo),
+})
+
+console.log('首次写请求遇到网关错误')
+await check('Core 已保存但浏览器收到 502：只写一次，用同一 commandId 查回 APPLIED', async () => {
+  const core = new Map<string, unknown>()
+  let sends = 0
+  let sentId = ''
+  const seen: string[] = []
+  const out = await runCommand({
+    scope: 't.502',
+    params: { operation: 'stores.update', storeCode: 'sto_1' },
+    send: async (id) => {
+      sends++
+      sentId = id
+      core.set(id, storeApplied(id))
+      throw new ApiError('Bad Gateway', 'UNKNOWN', { httpStatus: 502 })
+    },
+    lookup: async (cmd) => {
+      seen.push(cmd.commandId)
+      assert.deepEqual(cmd.params, { operation: 'stores.update', storeCode: 'sto_1' })
+      const saved = core.get(cmd.commandId)
+      return saved
+        ? parseStoreCommand(saved, cmd.commandId)
+        : parseStoreCommand({ viewVersion: STORE_V, outcome: 'NOT_OBSERVED', commandId: cmd.commandId }, cmd.commandId)
+    },
+    lookupOptions: once,
+  })
+  assert.equal(sends, 1)
+  assert.deepEqual(seen, [sentId])
+  assert.equal(out.state, 'APPLIED')
+  assert.equal(out.state === 'APPLIED' && out.recovered, true)
+  assert.equal(getPendingCommand('t.502'), null)
+})
+for (const status of [503, 504]) {
+  await check(`首次写入收到 ${status}，查询 NOT_OBSERVED：保留原 commandId 与查询参数`, async () => {
+    const scope = `t.${status}.first`
+    let sends = 0
+    let sentId = ''
+    const out = await runCommand({
+      scope,
+      params: { operation: 'stores.update', storeCode: 'sto_1' },
+      send: async (id) => {
+        sends++
+        sentId = id
+        throw new ApiError('gateway', 'UNKNOWN', { httpStatus: status })
+      },
+      lookup: async (cmd) =>
+        parseStoreCommand({ viewVersion: STORE_V, outcome: 'NOT_OBSERVED', commandId: cmd.commandId }, cmd.commandId),
+      lookupOptions: once,
+    })
+    assert.equal(sends, 1)
+    assert.deepEqual(out, { state: 'PENDING', commandId: sentId })
+    const kept = getPendingCommand(scope)
+    assert.equal(kept?.commandId, sentId)
+    assert.deepEqual(kept?.params, { operation: 'stores.update', storeCode: 'sto_1' })
+    forgetCommand(scope)
+  })
+}
+await check('首次写入 502 后查询也 502：保持待确认，不重发', async () => {
+  let sends = 0
+  const out = await runCommand({
+    scope: 't.502.lookup',
+    params: {},
+    send: async () => {
+      sends++
+      throw new ApiError('gateway', 'UNKNOWN', { httpStatus: 502 })
+    },
+    lookup: async () => {
+      throw new ApiError('gateway', 'UNKNOWN', { httpStatus: 502 })
+    },
+    lookupOptions: { attempts: 2, intervalMs: 0 },
+  })
+  assert.equal(sends, 1)
+  assert.equal(out.state, 'PENDING')
+  assert.ok(getPendingCommand('t.502.lookup'))
+  forgetCommand('t.502.lookup')
+})
+
+console.log('409 处理')
+await check('门店编辑首次收到 409 VERSION_CONFLICT：重新读取编辑版本，不查询结果', async () => {
+  let lookups = 0
+  let editReads = 0
+  const readEdit = async () => {
+    editReads++
+    return parseStoreEdit({ viewVersion: STORE_V, configurationVersion: '9', store: storeRow('HZ-001') }, 'sto_1')
+  }
+  let version = (await readEdit()).configurationVersion
+  try {
+    await runCommand({
+      scope: 't.store.conflict',
+      params: { operation: 'stores.update', storeCode: 'sto_1' },
+      send: async () => {
+        throw new ApiError('conflict', 'VERSION_CONFLICT', { httpStatus: 409 })
+      },
+      lookup: async () => {
+        lookups++
+        return { status: 'NOT_OBSERVED' as const }
+      },
+      lookupOptions: once,
+    })
+    assert.fail('应抛出版本冲突')
+  } catch (e) {
+    assert.ok(isVersionConflict(e))
+    version = (await readEdit()).configurationVersion
+  }
+  assert.equal(lookups, 0)
+  assert.equal(editReads, 2)
+  assert.equal(version, '9')
+  assert.equal(getPendingCommand('t.store.conflict'), null)
+})
+await check('其他 409 错误码原样抛出，保留错误码，不查询', async () => {
+  let lookups = 0
+  await assert.rejects(
+    runCommand({
+      scope: 't.409.other',
+      params: {},
+      send: async () => {
+        throw new ApiError('duplicate', 'MERCHANT_STORE_NO_CONFLICT', { httpStatus: 409 })
+      },
+      lookup: async () => {
+        lookups++
+        return { status: 'NOT_OBSERVED' as const }
+      },
+      lookupOptions: once,
+    }),
+    (e: unknown) => e instanceof ApiError && e.code === 'MERCHANT_STORE_NO_CONFLICT' && !isVersionConflict(e),
+  )
+  assert.equal(lookups, 0)
+  assert.equal(getPendingCommand('t.409.other'), null)
+})
+
+console.log('历史门店无商户门店号')
+await check('merchantStoreNo 为 null 的编辑数据可打开，表单显示为空', () => {
+  const view = parseStoreEdit({ viewVersion: STORE_V, configurationVersion: '3', store: storeRow(null) }, 'sto_1')
+  assert.equal(view.store.merchantStoreNo, null)
+  assert.equal(storeFormFromEdit(view).merchantStoreNo, '')
+})
+await check('merchantStoreNo 为 number 时拒绝', () => {
+  rejects(() =>
+    parseStoreEdit({ viewVersion: STORE_V, configurationVersion: '3', store: { ...storeRow(null), merchantStoreNo: 1 } }, 'sto_1'),
+  )
+})
+await check('空商户门店号无法保存，填入后可正常提交', async () => {
+  const view = parseStoreEdit({ viewVersion: STORE_V, configurationVersion: '3', store: storeRow(null) }, 'sto_1')
+  const form = storeFormFromEdit(view)
+  assert.equal(validateStoreForm(form).merchantStoreNo, '请输入商户门店编号')
+  assert.equal(storeFormValid({ ...form, merchantStoreNo: '   ' }), false)
+  form.merchantStoreNo = 'HZ-009'
+  assert.equal(storeFormValid(form), true)
+  let sentBody: unknown = null
+  const out = await runCommand({
+    scope: 't.store.fill',
+    params: { operation: 'stores.update', storeCode: 'sto_1' },
+    send: async (id) => {
+      sentBody = { commandId: id, expectedConfigurationVersion: view.configurationVersion, ...form }
+      return parseStoreCommand(storeApplied(id, form.merchantStoreNo), id)
+    },
+    lookup: async () => {
+      throw new Error('不应查询')
+    },
+  })
+  assert.equal(out.state, 'APPLIED')
+  assert.equal(out.state === 'APPLIED' && out.result.store.merchantStoreNo, 'HZ-009')
+  assert.equal((sentBody as { merchantStoreNo: string }).merchantStoreNo, 'HZ-009')
+  assert.equal((sentBody as { expectedConfigurationVersion: string }).expectedConfigurationVersion, '3')
+})
+
 console.log(`\n${passed} passed, ${failures.length} failed`)
 if (failures.length) process.exit(1)
